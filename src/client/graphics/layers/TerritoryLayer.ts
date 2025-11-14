@@ -19,6 +19,7 @@ import {
   DragEvent,
   MouseOverEvent,
   TerritoryWebGLStatusEvent,
+  ToggleTerritoryWebGLDebugBordersEvent,
   ToggleTerritoryWebGLEvent,
 } from "../../InputHandler";
 import { FrameProfiler } from "../FrameProfiler";
@@ -285,6 +286,11 @@ export class TerritoryLayer implements Layer {
       this.userSettings.toggleTerritoryWebGL();
       this.useWebGL = this.userSettings.territoryWebGL();
       this.redraw();
+    });
+    this.eventBus.on(ToggleTerritoryWebGLDebugBordersEvent, (e) => {
+      if (this.borderRenderer instanceof WebGLBorderRenderer) {
+        this.borderRenderer.setDebugPulseEnabled(e.enabled);
+      }
     });
     this.eventBus.on(DragEvent, (e) => {
       // TODO: consider re-enabling this on mobile or low end devices for smoother dragging.
