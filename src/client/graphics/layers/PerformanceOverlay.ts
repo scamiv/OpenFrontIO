@@ -6,8 +6,6 @@ import {
   TickMetricsEvent,
   TogglePerformanceOverlayEvent,
 } from "../../InputHandler";
-import { translateText } from "../../Utils";
-import { FrameProfiler } from "../FrameProfiler";
 import { Layer } from "./Layer";
 
 @customElement("performance-overlay")
@@ -48,9 +46,6 @@ export class PerformanceOverlay extends LitElement implements Layer {
   @state()
   private position: { x: number; y: number } = { x: 50, y: 20 }; // Percentage values
 
-  @state()
-  private copyStatus: "idle" | "success" | "error" = "idle";
-
   private frameCount: number = 0;
   private lastTime: number = 0;
   private frameTimes: number[] = [];
@@ -60,8 +55,6 @@ export class PerformanceOverlay extends LitElement implements Layer {
   private dragStart: { x: number; y: number } = { x: 0, y: 0 };
   private tickExecutionTimes: number[] = [];
   private tickDelayTimes: number[] = [];
-
-  private copyStatusTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   // Smoothed per-layer render timings (EMA over recent frames)
   private layerStats: Map<
@@ -158,26 +151,6 @@ export class PerformanceOverlay extends LitElement implements Layer {
       pointer-events: auto;
     }
 
-    .copy-json-button {
-      position: absolute;
-      top: 8px;
-      left: 70px;
-      height: 20px;
-      padding: 0 6px;
-      background-color: rgba(0, 0, 0, 0.8);
-      border-radius: 4px;
-      color: white;
-      font-size: 10px;
-      border: none;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      line-height: 1;
-      user-select: none;
-      pointer-events: auto;
-    }
-
     .layers-section {
       margin-top: 4px;
       border-top: 1px solid rgba(255, 255, 255, 0.1);
@@ -226,7 +199,6 @@ export class PerformanceOverlay extends LitElement implements Layer {
   init() {
     this.eventBus.on(TogglePerformanceOverlayEvent, () => {
       this.userSettings.togglePerformanceOverlay();
-      this.setVisible(this.userSettings.performanceOverlay());
     });
     this.eventBus.on(TickMetricsEvent, (event: TickMetricsEvent) => {
       this.updateTickMetrics(event.tickExecutionDuration, event.tickDelay);
@@ -235,7 +207,6 @@ export class PerformanceOverlay extends LitElement implements Layer {
 
   setVisible(visible: boolean) {
     this.isVisible = visible;
-    FrameProfiler.setEnabled(visible);
   }
 
   private handleClose() {
@@ -247,8 +218,7 @@ export class PerformanceOverlay extends LitElement implements Layer {
     const target = e.target as HTMLElement;
     if (
       target.classList.contains("close-button") ||
-      target.classList.contains("reset-button") ||
-      target.classList.contains("copy-json-button")
+      target.classList.contains("reset-button")
     ) {
       return;
     }
@@ -319,13 +289,7 @@ export class PerformanceOverlay extends LitElement implements Layer {
     frameDuration: number,
     layerDurations?: Record<string, number>,
   ) {
-    const wasVisible = this.isVisible;
     this.isVisible = this.userSettings.performanceOverlay();
-
-    // Update FrameProfiler enabled state when visibility changes
-    if (wasVisible !== this.isVisible) {
-      FrameProfiler.setEnabled(this.isVisible);
-    }
 
     if (!this.isVisible) return;
 
@@ -468,70 +432,6 @@ export class PerformanceOverlay extends LitElement implements Layer {
     return "performance-bad";
   }
 
-  private buildPerformanceSnapshot() {
-    return {
-      timestamp: new Date().toISOString(),
-      fps: {
-        current: this.currentFPS,
-        average60s: this.averageFPS,
-        frameTimeMs: this.frameTime,
-        history: [...this.fpsHistory],
-      },
-      ticks: {
-        executionAvgMs: this.tickExecutionAvg,
-        executionMaxMs: this.tickExecutionMax,
-        delayAvgMs: this.tickDelayAvg,
-        delayMaxMs: this.tickDelayMax,
-        executionSamples: [...this.tickExecutionTimes],
-        delaySamples: [...this.tickDelayTimes],
-      },
-      layers: this.layerBreakdown.map((layer) => ({ ...layer })),
-    };
-  }
-
-  private clearCopyStatusTimeout() {
-    if (this.copyStatusTimeoutId !== null) {
-      clearTimeout(this.copyStatusTimeoutId);
-      this.copyStatusTimeoutId = null;
-    }
-  }
-
-  private scheduleCopyStatusReset() {
-    this.clearCopyStatusTimeout();
-    this.copyStatusTimeoutId = setTimeout(() => {
-      this.copyStatus = "idle";
-      this.copyStatusTimeoutId = null;
-      this.requestUpdate();
-    }, 2000);
-  }
-
-  private async handleCopyJson() {
-    const snapshot = this.buildPerformanceSnapshot();
-    const json = JSON.stringify(snapshot, null, 2);
-
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(json);
-      } else {
-        const textarea = document.createElement("textarea");
-        textarea.value = json;
-        textarea.style.position = "fixed";
-        textarea.style.left = "-9999px";
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textarea);
-      }
-
-      this.copyStatus = "success";
-    } catch (err) {
-      console.warn("Failed to copy performance snapshot", err);
-      this.copyStatus = "error";
-    }
-
-    this.scheduleCopyStatusReset();
-  }
-
   render() {
     if (!this.isVisible) {
       return html``;
@@ -542,13 +442,6 @@ export class PerformanceOverlay extends LitElement implements Layer {
       top: ${this.position.y}px;
       transform: none;
     `;
-
-    const copyLabel =
-      this.copyStatus === "success"
-        ? translateText("performance_overlay.copied")
-        : this.copyStatus === "error"
-          ? translateText("performance_overlay.failed_copy")
-          : translateText("performance_overlay.copy_clipboard");
 
     const maxLayerAvg =
       this.layerBreakdown.length > 0
@@ -561,49 +454,40 @@ export class PerformanceOverlay extends LitElement implements Layer {
         style="${style}"
         @mousedown="${this.handleMouseDown}"
       >
-        <button class="reset-button" @click="${this.handleReset}">
-          ${translateText("performance_overlay.reset")}
-        </button>
-        <button
-          class="copy-json-button"
-          @click="${this.handleCopyJson}"
-          title="${translateText("performance_overlay.copy_json_title")}"
-        >
-          ${copyLabel}
-        </button>
+        <button class="reset-button" @click="${this.handleReset}">Reset</button>
         <button class="close-button" @click="${this.handleClose}">×</button>
         <div class="performance-line">
-          ${translateText("performance_overlay.fps")}
+          FPS:
           <span class="${this.getPerformanceColor(this.currentFPS)}"
             >${this.currentFPS}</span
           >
         </div>
         <div class="performance-line">
-          ${translateText("performance_overlay.avg_60s")}
+          Avg (60s):
           <span class="${this.getPerformanceColor(this.averageFPS)}"
             >${this.averageFPS}</span
           >
         </div>
         <div class="performance-line">
-          ${translateText("performance_overlay.frame")}
+          Frame:
           <span class="${this.getPerformanceColor(1000 / this.frameTime)}"
             >${this.frameTime}ms</span
           >
         </div>
         <div class="performance-line">
-          ${translateText("performance_overlay.tick_exec")}
+          Tick Exec:
           <span>${this.tickExecutionAvg.toFixed(2)}ms</span>
           (max: <span>${this.tickExecutionMax}ms</span>)
         </div>
         <div class="performance-line">
-          ${translateText("performance_overlay.tick_delay")}
+          Tick Delay:
           <span>${this.tickDelayAvg.toFixed(2)}ms</span>
           (max: <span>${this.tickDelayMax}ms</span>)
         </div>
         ${this.layerBreakdown.length
           ? html`<div class="layers-section">
               <div class="performance-line">
-                ${translateText("performance_overlay.layers_header")}
+                Layers (avg / max, sorted by total time):
               </div>
               ${this.layerBreakdown.map((layer) => {
                 const width = Math.min(

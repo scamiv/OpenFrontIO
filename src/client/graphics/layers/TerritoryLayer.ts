@@ -517,7 +517,13 @@ export class TerritoryLayer implements Layer {
       this.game.height(),
     );
     FrameProfiler.end("TerritoryLayer:drawCanvas", drawCanvasStart);
+
+    const borderRenderStart = FrameProfiler.start();
     this.borderRenderer.render(context);
+    FrameProfiler.end(
+      "TerritoryLayer:borderRenderer.render",
+      borderRenderStart,
+    );
     if (this.game.inSpawnPhase()) {
       const highlightDrawStart = FrameProfiler.start();
       context.drawImage(
@@ -557,6 +563,7 @@ export class TerritoryLayer implements Layer {
   }
 
   paintTerritory(tile: TileRef, _isBorder: boolean = false) {
+    const cpuStart = FrameProfiler.start();
     const hasOwner = this.game.hasOwner(tile);
     const owner = hasOwner ? (this.game.owner(tile) as PlayerView) : null;
     const isBorderTile = this.game.isBorder(tile);
@@ -614,12 +621,19 @@ export class TerritoryLayer implements Layer {
       }
     }
 
+    FrameProfiler.end("TerritoryLayer:paintTerritory.cpu", cpuStart);
+
+    const borderUpdateStart = FrameProfiler.start();
     this.borderRenderer.updateBorder(
       tile,
       owner,
       isBorderTile,
       isDefended,
       hasFallout,
+    );
+    FrameProfiler.end(
+      "TerritoryLayer:borderRenderer.updateBorder",
+      borderUpdateStart,
     );
   }
 
