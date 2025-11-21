@@ -1,6 +1,7 @@
 import {
   Execution,
   Game,
+  MessageType,
   Player,
   TrainType,
   Unit,
@@ -36,6 +37,29 @@ export class TrainExecution implements Execution {
     return this.player;
   }
 
+  private enterRailroad(railroad: OrientedRailroad) {
+    const rail = railroad.getRailroad();
+    rail.incrementTrainCount();
+    const fare = rail.getFare();
+    this.player.addGold(-fare, railroad.getStart().tile());
+    if (this.mg) {
+      this.mg.displayMessage(
+        "Paid railroad fare",
+        MessageType.RECEIVED_GOLD_FROM_TRADE,
+        this.player.id(),
+        -fare,
+      );
+    }
+  }
+
+  private leaveRailroad() {
+    if (!this.currentRailroad) {
+      return;
+    }
+    const rail = this.currentRailroad.getRailroad();
+    rail.decrementTrainCount();
+  }
+
   init(mg: Game, ticks: number): void {
     this.mg = mg;
     const stations = this.railNetwork.findStationsPath(
@@ -51,6 +75,7 @@ export class TrainExecution implements Execution {
     const railroad = getOrientedRailroad(this.stations[0], this.stations[1]);
     if (railroad) {
       this.currentRailroad = railroad;
+      this.enterRailroad(railroad);
     } else {
       this.active = false;
       return;
@@ -129,6 +154,8 @@ export class TrainExecution implements Execution {
 
   private deleteTrain() {
     this.active = false;
+    this.leaveRailroad();
+
     if (this.train?.isActive()) {
       this.train.delete(false);
     }
@@ -189,10 +216,14 @@ export class TrainExecution implements Execution {
 
   private nextStation() {
     if (this.stations.length > 2) {
+      // Leave current railroad segment
+      this.leaveRailroad();
+
       this.stations.shift();
       const railRoad = getOrientedRailroad(this.stations[0], this.stations[1]);
       if (railRoad) {
         this.currentRailroad = railRoad;
+        this.enterRailroad(railRoad);
         return true;
       }
     }
