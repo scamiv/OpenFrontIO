@@ -25,6 +25,7 @@ export class PublicLobby extends LitElement {
   private debounceDelay: number = 750;
   private lobbyIDToStart = new Map<GameID, number>();
   private lobbiesFetchInFlight: Promise<GameInfo[]> | null = null;
+  private mapNationCounts = new Map<GameMapType, number>();
 
   createRenderRoot() {
     return this;
@@ -50,6 +51,7 @@ export class PublicLobby extends LitElement {
   private async fetchAndUpdateLobbies(): Promise<void> {
     try {
       this.lobbies = await this.fetchLobbies();
+      const pendingNationCounts: Promise<number>[] = [];
       this.lobbies.forEach((l) => {
         // Store the start time on first fetch because endpoint is cached, causing
         // the time to appear irregular.
@@ -62,7 +64,36 @@ export class PublicLobby extends LitElement {
         if (l.gameConfig && !this.mapImages.has(l.gameID)) {
           this.loadMapImage(l.gameID, l.gameConfig.gameMap);
         }
+        const gameMap = l.gameConfig?.gameMap as GameMapType | undefined;
+        const npcEnabled = l.gameConfig?.disableNPCs === false;
+        if (
+          l.gameConfig &&
+          npcEnabled &&
+          gameMap &&
+          !this.mapNationCounts.has(gameMap)
+        ) {
+          pendingNationCounts.push(
+            terrainMapFileLoader
+              .getMapData(gameMap)
+              .manifest()
+              .then((manifest) => {
+                this.mapNationCounts.set(gameMap, manifest.nations.length);
+                return manifest.nations.length;
+              })
+              .catch((error) => {
+                console.error(
+                  "Failed to load nation count for map",
+                  gameMap,
+                  error,
+                );
+                return 0;
+              }),
+          );
+        }
       });
+      if (pendingNationCounts.length > 0) {
+        await Promise.all(pendingNationCounts);
+      }
     } catch (error) {
       console.error("Error fetching lobbies:", error);
     }
@@ -129,9 +160,18 @@ export class PublicLobby extends LitElement {
         ? (lobby.gameConfig.playerTeams ?? 0)
         : null;
 
+    const npcEnabled = lobby.gameConfig.disableNPCs === false;
     const maxPlayers = lobby.gameConfig.maxPlayers ?? 0;
-    const teamSize = this.getTeamSize(teamCount, maxPlayers);
-    const teamTotal = this.getTeamTotal(teamCount, teamSize, maxPlayers);
+    const nations = npcEnabled
+      ? (this.mapNationCounts.get(lobby.gameConfig.gameMap as GameMapType) ?? 0)
+      : 0;
+    const totalPlayers = maxPlayers + nations;
+    const teamSize = this.getTeamSize(
+      teamCount,
+      totalPlayers,
+      lobby.gameConfig.gameMap as GameMapType,
+    );
+    const teamTotal = this.getTeamTotal(teamCount, teamSize, totalPlayers);
     const modeLabel = this.getModeLabel(
       lobby.gameConfig.gameMode,
       teamCount,
@@ -215,17 +255,20 @@ export class PublicLobby extends LitElement {
 
   private getTeamSize(
     teamCount: number | string | null,
-    maxPlayers: number,
+    totalPlayers: number,
+    gameMap: GameMapType,
   ): number | undefined {
     if (typeof teamCount === "string") {
       if (teamCount === Duos) return 2;
       if (teamCount === Trios) return 3;
       if (teamCount === Quads) return 4;
-      if (teamCount === HumansVsNations) return Math.floor(maxPlayers / 2);
+      if (teamCount === HumansVsNations) {
+        return Math.floor(totalPlayers / 2);
+      }
       return undefined;
     }
     if (typeof teamCount === "number" && teamCount > 0) {
-      return Math.floor(maxPlayers / teamCount);
+      return Math.floor(totalPlayers / teamCount);
     }
     return undefined;
   }
@@ -233,11 +276,11 @@ export class PublicLobby extends LitElement {
   private getTeamTotal(
     teamCount: number | string | null,
     teamSize: number | undefined,
-    maxPlayers: number,
+    totalPlayers: number,
   ): number | undefined {
     if (typeof teamCount === "number") return teamCount;
     if (teamCount === HumansVsNations) return 2;
-    if (teamSize && teamSize > 0) return Math.floor(maxPlayers / teamSize);
+    if (teamSize && teamSize > 0) return Math.floor(totalPlayers / teamSize);
     return undefined;
   }
 
