@@ -12,6 +12,7 @@
     "tunnel": "npm run build-prod && npm run start:server",
     "test": "jest",
     "perf": "npx tsx tests/perf/*.ts",
+    "replay:analyze": "npx tsx tools/replay-analyzer/analyzeReplay.ts",
     "test:coverage": "jest --coverage",
     "format": "prettier --ignore-unknown --write .",
     "format:map-generator": "cd map-generator && go fmt .",

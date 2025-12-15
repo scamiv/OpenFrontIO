@@ -29,7 +29,8 @@
     "proprietary/**/*",
     "generated/**/*",
     "tests/**/*",
-    "src/scripts"
+    "src/scripts",
+    "tools/**/*"
   ],
   "exclude": ["node_modules"]
 }
