@@ -17,6 +17,7 @@ type ReproCase = {
 async function loadMaps(mapKeyLower: string): Promise<{
   fine: GameMap;
   coarse4x: GameMap;
+  coarse16x: GameMap;
 }> {
   const root = path.resolve(__dirname, "../../../");
   const base = path.join(root, "resources", "maps", mapKeyLower);
@@ -33,8 +34,50 @@ async function loadMaps(mapKeyLower: string): Promise<{
     manifest.map4x,
     fs.readFileSync(path.join(base, "map4x.bin")),
   );
+  const coarse16x = await genTerrainFromBin(
+    manifest.map16x,
+    fs.readFileSync(path.join(base, "map16x.bin")),
+  );
 
-  return { fine, coarse4x };
+  return { fine, coarse4x, coarse16x };
+}
+
+function buildOptimisticWaterDownsample(
+  fine: GameMap,
+  scaleX: number,
+  scaleY: number,
+): GameMap {
+  const fw = fine.width();
+  const fh = fine.height();
+  if (fw % scaleX !== 0 || fh % scaleY !== 0) {
+    throw new Error(`fine ${fw}x${fh} not divisible by ${scaleX}x${scaleY}`);
+  }
+  const cw = fw / scaleX;
+  const ch = fh / scaleY;
+  const water = new Uint8Array(cw * ch);
+
+  // Optimistic water: coarse cell is water if ANY fine tile is water.
+  for (let y = 0; y < fh; y++) {
+    const cy = (y / scaleY) | 0;
+    const fineRow = y * fw;
+    const coarseRow = cy * cw;
+    for (let x = 0; x < fw; x++) {
+      const cx = (x / scaleX) | 0;
+      const fineRef = fineRow + x;
+      if (fine.isWater(fineRef as TileRef)) {
+        water[coarseRow + cx] = 1;
+      }
+    }
+  }
+
+  return {
+    width: () => cw,
+    height: () => ch,
+    ref: (x: number, y: number) => y * cw + x,
+    x: (ref: TileRef) => ref % cw,
+    y: (ref: TileRef) => (ref / cw) | 0,
+    isWater: (ref: TileRef) => water[ref] === 1,
+  } as any;
 }
 
 function toRefs(
@@ -56,6 +99,20 @@ function toRefs(
 function pct(n: number, d: number): number {
   if (d <= 0) return 0;
   return (n / d) * 100;
+}
+
+function summarize(nums: number[]) {
+  if (nums.length === 0) {
+    return { n: 0, min: 0, max: 0, mean: 0, median: 0 };
+  }
+  const sorted = [...nums].sort((a, b) => a - b);
+  const n = sorted.length;
+  const min = sorted[0]!;
+  const max = sorted[n - 1]!;
+  const mean = sorted.reduce((a, b) => a + b, 0) / n;
+  const median =
+    n % 2 === 1 ? sorted[(n - 1) / 2]! : (sorted[n / 2 - 1]! + sorted[n / 2]!) / 2;
+  return { n, min, max, mean, median };
 }
 
 const run = process.env.RUN_WORLD_ROUTE_REPRO === "1";
@@ -80,15 +137,20 @@ const run = process.env.RUN_WORLD_ROUTE_REPRO === "1";
 
   let fine: GameMap;
   let coarse4x: GameMap;
+  let coarse16x: GameMap;
+  let coarse64x: GameMap;
 
   beforeAll(async () => {
-    ({ fine, coarse4x } = await loadMaps(map));
+    ({ fine, coarse4x, coarse16x } = await loadMaps(map));
+    // "64x" here means 8x8 downsample in each dimension (area / 64).
+    coarse64x = buildOptimisticWaterDownsample(fine, 8, 8);
   });
 
   function runCase(
     label: string,
     repro: ReproCase,
     coarseToFine?: { corridorRadius?: number; maxAttempts?: number },
+    coarseMap: GameMap = coarse4x,
   ) {
     const { seedNodes, seedOrigins, targets } = toRefs(
       fine,
@@ -102,7 +164,7 @@ const run = process.env.RUN_WORLD_ROUTE_REPRO === "1";
       seedOrigins,
       targets,
       { kingMoves: true, noCornerCutting: true },
-      coarse4x,
+      coarseMap,
       coarseToFine ?? {},
     );
 
@@ -122,6 +184,7 @@ const run = process.env.RUN_WORLD_ROUTE_REPRO === "1";
       `WORLD_REPRO_METRICS ${JSON.stringify({
         label,
         repro,
+        coarse: { w: coarseMap.width(), h: coarseMap.height() },
         coarseToFine: coarseToFine ?? null,
         pathLen: res!.path.length,
         fallbackMs,
@@ -168,6 +231,128 @@ const run = process.env.RUN_WORLD_ROUTE_REPRO === "1";
     expect(res.stats?.maskExpansions ?? 0).toBeGreaterThan(0);
   });
 
+  test("micro (16x) planner metrics (diagnostic)", () => {
+    const res = runCase("formerlyFallback/micro16x", formerlyFallback, undefined, coarse16x);
+    expect(res.stats?.fallbackMs ?? 0).toBe(0);
+  });
+
+  test("micro (64x) planner metrics (synthetic, optimistic)", () => {
+    const res = runCase(
+      "formerlyFallback/micro64x",
+      formerlyFallback,
+      undefined,
+      coarse64x,
+    );
+    expect(res.stats?.fallbackMs ?? 0).toBe(0);
+  });
+
+  const runCompare = process.env.RUN_WORLD_ROUTE_REPRO_COMPARE === "1";
+  (runCompare ? test : test.skip)("compare 4x vs 16x (10 runs)", () => {
+    const iterations = 10;
+
+    // Warm up caches (mapping, bfs instances) without recording.
+    runCase("warmup/4x", formerlyFallback, undefined, coarse4x);
+    runCase("warmup/16x", formerlyFallback, undefined, coarse16x);
+
+    const results4x = { totalMs: [] as number[], planMs: [] as number[], refineMs: [] as number[] };
+    for (let i = 0; i < iterations; i++) {
+      const res = runCase(`cmp/4x/${i}`, formerlyFallback, undefined, coarse4x);
+      results4x.totalMs.push(res.stats?.totalMs ?? 0);
+      results4x.planMs.push(res.stats?.planMs ?? 0);
+      results4x.refineMs.push(res.stats?.refineMs ?? 0);
+    }
+
+    const results16x = { totalMs: [] as number[], planMs: [] as number[], refineMs: [] as number[] };
+    for (let i = 0; i < iterations; i++) {
+      const res = runCase(`cmp/16x/${i}`, formerlyFallback, undefined, coarse16x);
+      results16x.totalMs.push(res.stats?.totalMs ?? 0);
+      results16x.planMs.push(res.stats?.planMs ?? 0);
+      results16x.refineMs.push(res.stats?.refineMs ?? 0);
+    }
+
+    console.log(
+      `WORLD_REPRO_COMPARE ${JSON.stringify({
+        iterations,
+        case: formerlyFallback,
+        coarse4x: {
+          w: coarse4x.width(),
+          h: coarse4x.height(),
+          totalMs: summarize(results4x.totalMs),
+          planMs: summarize(results4x.planMs),
+          refineMs: summarize(results4x.refineMs),
+        },
+        coarse16x: {
+          w: coarse16x.width(),
+          h: coarse16x.height(),
+          totalMs: summarize(results16x.totalMs),
+          planMs: summarize(results16x.planMs),
+          refineMs: summarize(results16x.refineMs),
+        },
+      })}`,
+    );
+
+    expect(results4x.totalMs.length).toBe(iterations);
+    expect(results16x.totalMs.length).toBe(iterations);
+  });
+
+  const runCompare64 = process.env.RUN_WORLD_ROUTE_REPRO_COMPARE_64X === "1";
+  (runCompare64 ? test : test.skip)("compare 4x vs 16x vs 64x (10 runs)", () => {
+    const iterations = 10;
+
+    // Warm up caches (mapping, bfs instances) without recording.
+    runCase("warmup/4x", formerlyFallback, undefined, coarse4x);
+    runCase("warmup/16x", formerlyFallback, undefined, coarse16x);
+    runCase("warmup/64x", formerlyFallback, undefined, coarse64x);
+
+    const collect = (label: string, coarseMap: GameMap) => {
+      const totalMs: number[] = [];
+      const planMs: number[] = [];
+      const refineMs: number[] = [];
+      const maskExp: number[] = [];
+      const expanded: number[] = [];
+      let fallbacks = 0;
+
+      for (let i = 0; i < iterations; i++) {
+        const res = runCase(`cmp/${label}/${i}`, formerlyFallback, undefined, coarseMap);
+        totalMs.push(res.stats?.totalMs ?? 0);
+        planMs.push(res.stats?.planMs ?? 0);
+        refineMs.push(res.stats?.refineMs ?? 0);
+        maskExp.push(res.stats?.maskExpansions ?? 0);
+        expanded.push(res.stats?.expanded ?? 0);
+        if ((res.stats?.fallbackMs ?? 0) > 0) fallbacks++;
+      }
+
+      return {
+        w: coarseMap.width(),
+        h: coarseMap.height(),
+        fallbacks,
+        totalMs: summarize(totalMs),
+        planMs: summarize(planMs),
+        refineMs: summarize(refineMs),
+        maskExpansions: summarize(maskExp),
+        expanded: summarize(expanded),
+      };
+    };
+
+    const s4 = collect("4x", coarse4x);
+    const s16 = collect("16x", coarse16x);
+    const s64 = collect("64x", coarse64x);
+
+    console.log(
+      `WORLD_REPRO_COMPARE_SCALES ${JSON.stringify({
+        iterations,
+        case: formerlyFallback,
+        coarse4x: s4,
+        coarse16x: s16,
+        coarse64x: s64,
+      })}`,
+    );
+
+    expect(s4.fallbacks).toBe(0);
+    expect(s16.fallbacks).toBe(0);
+    expect(s64.fallbacks).toBe(0);
+  });
+
   const runSlowFallback = process.env.RUN_WORLD_ROUTE_REPRO_FALLBACK === "1";
   (runSlowFallback ? test : test.skip)(
     "diagnostic: tight corridor + no expansion triggers fallback (slow)",
@@ -181,4 +366,3 @@ const run = process.env.RUN_WORLD_ROUTE_REPRO === "1";
     },
   );
 });
-
