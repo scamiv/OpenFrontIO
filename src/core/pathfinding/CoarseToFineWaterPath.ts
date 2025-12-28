@@ -204,6 +204,8 @@ export function findWaterPathFromSeedsCoarseToFine(
       planTiles?: number;
       planSeedCount?: number;
       planTargetCount?: number;
+      maskExpansions?: number;
+      newlyAllowedRegions?: number;
     },
   ) => {
     if (result === null) return null;
@@ -219,6 +221,12 @@ export function findWaterPathFromSeedsCoarseToFine(
     result.stats.planTiles = patch.planTiles;
     result.stats.planSeedCount = patch.planSeedCount;
     result.stats.planTargetCount = patch.planTargetCount;
+    if (patch.maskExpansions !== undefined) {
+      result.stats.maskExpansions = patch.maskExpansions;
+    }
+    if (patch.newlyAllowedRegions !== undefined) {
+      result.stats.newlyAllowedRegions = patch.newlyAllowedRegions;
+    }
     return result;
   };
 
@@ -345,9 +353,9 @@ export function findWaterPathFromSeedsCoarseToFine(
     });
   }
 
-  // Start tight (radius 0) and rely on local widening + final fallback for robustness.
-  const corridorRadius0 = Math.max(0, coarseToFine.corridorRadius ?? 0);
-  const maxAttempts = Math.max(1, coarseToFine.maxAttempts ?? 3);
+  // Default to a slightly inflated corridor to avoid "optimistic coarse water" cliffs.
+  const corridorRadius0 = Math.max(0, coarseToFine.corridorRadius ?? 2);
+  const maxAttempts = Math.max(1, coarseToFine.maxAttempts ?? 6);
 
   // Allowed corridor stamp is stable across attempts (widening is cumulative).
   const allowedSet = getStampSet(coarseMap);
@@ -371,6 +379,8 @@ export function findWaterPathFromSeedsCoarseToFine(
     stamp: nextStamp(visitedSet),
   };
 
+  let maskExpansions = 0;
+  let newlyAllowedRegions = 0;
   const refineStart = performance.now();
   const refined = fineBfs.findWaterPathFromSeedsMaskExpanding(
     fineMap,
@@ -402,6 +412,8 @@ export function findWaterPathFromSeedsCoarseToFine(
       );
       expansionsLeft--;
       if (newCount <= 0) return 0;
+      maskExpansions++;
+      newlyAllowedRegions += newCount;
 
       // Reset visited coarse tracking for the next phase.
       visitedMask.stamp = nextStamp(visitedSet);
@@ -421,6 +433,8 @@ export function findWaterPathFromSeedsCoarseToFine(
       planTiles,
       planSeedCount,
       planTargetCount,
+      maskExpansions: refined.stats?.maskExpansions ?? maskExpansions,
+      newlyAllowedRegions: refined.stats?.newlyAllowedRegions ?? newlyAllowedRegions,
     });
   }
 
@@ -445,5 +459,7 @@ export function findWaterPathFromSeedsCoarseToFine(
     planTiles,
     planSeedCount,
     planTargetCount,
+    maskExpansions,
+    newlyAllowedRegions,
   });
 }
