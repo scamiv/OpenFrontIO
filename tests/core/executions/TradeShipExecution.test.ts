@@ -1,5 +1,11 @@
+jest.mock("../../../src/core/game/TransportShipUtils", () => {
+  const actual = jest.requireActual("../../../src/core/game/TransportShipUtils");
+  return { ...actual, boatPathFromTileToShore: jest.fn() };
+});
+
 import { TradeShipExecution } from "../../../src/core/execution/TradeShipExecution";
 import { Game, Player, Unit } from "../../../src/core/game/Game";
+import { boatPathFromTileToShore } from "../../../src/core/game/TransportShipUtils";
 import { setup } from "../../util/Setup";
 
 describe("TradeShipExecution", () => {
@@ -21,6 +27,9 @@ describe("TradeShipExecution", () => {
       instantBuild: true,
     });
     game.displayMessage = jest.fn();
+    (boatPathFromTileToShore as unknown as jest.Mock).mockImplementation(
+      (_gm: unknown, start: number, dst: number) => [start, start, dst],
+    );
     origOwner = {
       canBuild: jest.fn(() => true),
       buildUnit: jest.fn((type, spawn, opts) => tradeShip),
@@ -53,19 +62,19 @@ describe("TradeShipExecution", () => {
     } as any;
 
     piratePort = {
-      tile: jest.fn(() => 40011),
+      tile: jest.fn(() => 130),
       owner: jest.fn(() => pirate),
       isActive: jest.fn(() => true),
     } as any;
 
     srcPort = {
-      tile: jest.fn(() => 20011),
+      tile: jest.fn(() => 1),
       owner: jest.fn(() => origOwner),
       isActive: jest.fn(() => true),
     } as any;
 
     dstPort = {
-      tile: jest.fn(() => 30015), // 15x15
+      tile: jest.fn(() => 255), // 15x15 on a 16x16 map
       owner: jest.fn(() => dstOwner),
       isActive: jest.fn(() => true),
     } as any;
@@ -77,7 +86,7 @@ describe("TradeShipExecution", () => {
       setTargetUnit: jest.fn(),
       setSafeFromPirates: jest.fn(),
       delete: jest.fn(),
-      tile: jest.fn(() => 2001),
+      tile: jest.fn(() => 2),
     } as any;
 
     tradeShipExecution = new TradeShipExecution(origOwner, srcPort, dstPort);
@@ -113,6 +122,9 @@ describe("TradeShipExecution", () => {
   });
 
   it("should complete trade and award gold", () => {
+    (boatPathFromTileToShore as unknown as jest.Mock).mockImplementation(
+      (_gm: unknown, start: number, dst: number) => [start, dst],
+    );
     tradeShipExecution["pathFinder"] = {
       nextTile: jest.fn(() => ({ type: 2, node: 2001 })),
     } as any;
