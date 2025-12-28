@@ -189,27 +189,74 @@ export function findWaterPathFromSeedsCoarseToFine(
   coarseMap: GameMap | null = null,
   coarseToFine: CoarseToFineWaterPathOptions = {},
 ): MultiSourceAnyTargetBFSResult | null {
+  const totalStart = performance.now();
   const fineBfs = getBfs(fineMap);
 
+  const attachTimings = (
+    result: MultiSourceAnyTargetBFSResult | null,
+    patch: {
+      totalMs: number;
+      planMs: number;
+      maskMs: number;
+      refineMs: number;
+      fallbackMs: number;
+      planExpanded?: number;
+      planTiles?: number;
+      planSeedCount?: number;
+      planTargetCount?: number;
+    },
+  ) => {
+    if (result === null) return null;
+    if (!result.stats) {
+      result.stats = { expanded: 0, enqueued: 0 };
+    }
+    result.stats.totalMs = patch.totalMs;
+    result.stats.planMs = patch.planMs;
+    result.stats.maskMs = patch.maskMs;
+    result.stats.refineMs = patch.refineMs;
+    result.stats.fallbackMs = patch.fallbackMs;
+    result.stats.planExpanded = patch.planExpanded;
+    result.stats.planTiles = patch.planTiles;
+    result.stats.planSeedCount = patch.planSeedCount;
+    result.stats.planTargetCount = patch.planTargetCount;
+    return result;
+  };
+
   if (!coarseMap) {
-    return fineBfs.findWaterPathFromSeeds(
+    const result = fineBfs.findWaterPathFromSeeds(
       fineMap,
       seedNodes,
       seedOrigins,
       targets,
       bfsOpts,
     );
+    const totalMs = performance.now() - totalStart;
+    return attachTimings(result, {
+      totalMs,
+      planMs: 0,
+      maskMs: 0,
+      refineMs: totalMs,
+      fallbackMs: 0,
+    });
   }
 
   const mapping = getFineToCoarseMapping(fineMap, coarseMap);
   if (mapping === null) {
-    return fineBfs.findWaterPathFromSeeds(
+    const result = fineBfs.findWaterPathFromSeeds(
       fineMap,
       seedNodes,
       seedOrigins,
       targets,
       bfsOpts,
     );
+    const totalMs = performance.now() - totalStart;
+    return attachTimings(result, {
+      totalMs,
+      planMs: 0,
+      maskMs: 0,
+      refineMs: totalMs,
+      fallbackMs: 0,
+    });
   }
 
   const coarseWidth = coarseMap.width();
@@ -241,33 +288,61 @@ export function findWaterPathFromSeedsCoarseToFine(
   );
 
   if (coarseSeeds.length === 0 || coarseTargets.length === 0) {
-    return fineBfs.findWaterPathFromSeeds(
+    const result = fineBfs.findWaterPathFromSeeds(
       fineMap,
       seedNodes,
       seedOrigins,
       targets,
       bfsOpts,
     );
+    const totalMs = performance.now() - totalStart;
+    return attachTimings(result, {
+      totalMs,
+      planMs: 0,
+      maskMs: 0,
+      refineMs: totalMs,
+      fallbackMs: 0,
+    });
   }
 
   // Coarse solve (cheap) to define a corridor.
   const coarseBfs = getBfs(coarseMap);
+  const planStart = performance.now();
   const coarseResult = coarseBfs.findWaterPath(
     coarseMap,
     coarseSeeds,
     coarseTargets,
     bfsOpts,
   );
+  const planMs = performance.now() - planStart;
+  const planExpanded = coarseResult?.stats?.expanded;
+  const planTiles = coarseWidth * coarseHeight;
+  const planSeedCount = coarseSeeds.length;
+  const planTargetCount = coarseTargets.length;
 
   if (coarseResult === null) {
     // Safe fallback: if the coarse map is conservative, we might still have a fine path.
-    return fineBfs.findWaterPathFromSeeds(
+    const fallbackStart = performance.now();
+    const result = fineBfs.findWaterPathFromSeeds(
       fineMap,
       seedNodes,
       seedOrigins,
       targets,
       bfsOpts,
     );
+    const fallbackMs = performance.now() - fallbackStart;
+    const totalMs = performance.now() - totalStart;
+    return attachTimings(result, {
+      totalMs,
+      planMs,
+      maskMs: 0,
+      refineMs: 0,
+      fallbackMs,
+      planExpanded,
+      planTiles,
+      planSeedCount,
+      planTargetCount,
+    });
   }
 
   // Start tight (radius 0) and rely on local widening + final fallback for robustness.
@@ -277,6 +352,7 @@ export function findWaterPathFromSeedsCoarseToFine(
   // Allowed corridor stamp is stable across attempts (widening is cumulative).
   const allowedSet = getStampSet(coarseMap);
   const allowed = nextStamp(allowedSet);
+  const maskStart = performance.now();
   markCoarseCorridor(
     coarseWidth,
     coarseHeight,
@@ -285,6 +361,7 @@ export function findWaterPathFromSeedsCoarseToFine(
     coarseResult.path,
     corridorRadius0,
   );
+  const maskMs = performance.now() - maskStart;
 
   const visitedSet = getVisitedStampSet(coarseMap);
   let expansionsLeft = maxAttempts - 1;
@@ -294,6 +371,7 @@ export function findWaterPathFromSeedsCoarseToFine(
     stamp: nextStamp(visitedSet),
   };
 
+  const refineStart = performance.now();
   const refined = fineBfs.findWaterPathFromSeedsMaskExpanding(
     fineMap,
     seedNodes,
@@ -330,14 +408,42 @@ export function findWaterPathFromSeedsCoarseToFine(
       return newCount;
     },
   );
-  if (refined !== null) return refined;
+  const refineMs = performance.now() - refineStart;
+  if (refined !== null) {
+    const totalMs = performance.now() - totalStart;
+    return attachTimings(refined, {
+      totalMs,
+      planMs,
+      maskMs,
+      refineMs,
+      fallbackMs: 0,
+      planExpanded,
+      planTiles,
+      planSeedCount,
+      planTargetCount,
+    });
+  }
 
   // Final fallback: unrestricted fine BFS.
-  return fineBfs.findWaterPathFromSeeds(
+  const fallbackStart = performance.now();
+  const fallback = fineBfs.findWaterPathFromSeeds(
     fineMap,
     seedNodes,
     seedOrigins,
     targets,
     bfsOpts,
   );
+  const fallbackMs = performance.now() - fallbackStart;
+  const totalMs = performance.now() - totalStart;
+  return attachTimings(fallback, {
+    totalMs,
+    planMs,
+    maskMs,
+    refineMs,
+    fallbackMs,
+    planExpanded,
+    planTiles,
+    planSeedCount,
+    planTargetCount,
+  });
 }

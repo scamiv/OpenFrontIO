@@ -4,6 +4,23 @@ export type MultiSourceAnyTargetBFSResult = {
   source: TileRef;
   target: TileRef;
   path: TileRef[];
+  stats?: MultiSourceAnyTargetBFSStats;
+};
+
+export type MultiSourceAnyTargetBFSStats = {
+  expanded: number;
+  enqueued: number;
+  maskExpansions?: number;
+  newlyAllowedRegions?: number;
+  planExpanded?: number;
+  planTiles?: number;
+  planSeedCount?: number;
+  planTargetCount?: number;
+  totalMs?: number;
+  planMs?: number;
+  maskMs?: number;
+  refineMs?: number;
+  fallbackMs?: number;
 };
 
 export type MultiSourceAnyTargetBFSOptions = {
@@ -137,6 +154,10 @@ export class MultiSourceAnyTargetBFS {
           source: this.startOf[node] as TileRef,
           target: node,
           path: this.reconstructPath(node),
+          stats: {
+            expanded: head,
+            enqueued: tail,
+          },
         };
       }
 
@@ -337,6 +358,8 @@ export class MultiSourceAnyTargetBFS {
     let tail = 0;
 
     const visitedOut = opts.visitedMaskOut;
+    let maskExpansions = 0;
+    let newlyAllowedRegions = 0;
 
     const count = Math.min(seedNodes.length, seedOrigins.length);
     for (let i = 0; i < count; i++) {
@@ -409,6 +432,12 @@ export class MultiSourceAnyTargetBFS {
             source: this.startOf[node] as TileRef,
             target: node,
             path: this.reconstructPath(node),
+            stats: {
+              expanded: head,
+              enqueued: tail,
+              maskExpansions,
+              newlyAllowedRegions,
+            },
           };
         }
 
@@ -548,6 +577,8 @@ export class MultiSourceAnyTargetBFS {
       // Queue exhausted under current mask.
       const newCount = onQueueEmpty(outNewRegions);
       if (newCount <= 0) break;
+      maskExpansions++;
+      newlyAllowedRegions += newCount;
       activateNewRegions(newCount);
       // If expansion didn't actually yield any new reachable nodes, we'll loop back and exhaust again.
     }

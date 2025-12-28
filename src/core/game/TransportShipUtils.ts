@@ -1,6 +1,6 @@
 import { findWaterPathFromSeedsCoarseToFine } from "../pathfinding/CoarseToFineWaterPath";
 import { getWaterComponentIds } from "../pathfinding/WaterComponents";
-import { Game, Player, UnitType } from "./Game";
+import { Game, GameMapType, Player, UnitType } from "./Game";
 import { andFN, GameMap, manhattanDistFN, TileRef } from "./GameMap";
 
 type BoatRoute = {
@@ -13,6 +13,18 @@ function miniMapOrNull(gm: GameMap): GameMap | null {
   const mm = (gm as any).miniMap;
   if (typeof mm === "function") return mm.call(gm) as GameMap;
   return null;
+}
+
+function mapKeyLowerFromConfig(gm: Game): string | null {
+  const map = gm.config().gameConfig().gameMap;
+  const key = Object.keys(GameMapType).find(
+    (k) => GameMapType[k as keyof typeof GameMapType] === map,
+  );
+  return key?.toLowerCase() ?? null;
+}
+
+function fmtTile(gm: GameMap, tile: TileRef): string {
+  return `${tile}(${gm.x(tile)},${gm.y(tile)})`;
 }
 
 function insertTopK(
@@ -214,22 +226,45 @@ export function boatPathFromTileToShore(
   const duration = performance.now() - startTime;
   if (result === null) return null;
 
+  const totalTiles = gm.width() * gm.height();
+  const expanded = result.stats?.expanded ?? 0;
+  const enqueued = result.stats?.enqueued ?? 0;
+  const visitedPct = totalTiles > 0 ? (expanded / totalTiles) * 100 : 0;
+  const pfTotal = result.stats?.totalMs;
+  const pfPlan = result.stats?.planMs;
+  const pfMask = result.stats?.maskMs;
+  const pfRefine = result.stats?.refineMs;
+  const pfFallback = result.stats?.fallbackMs;
+  const planExpanded = result.stats?.planExpanded;
+  const planTiles = result.stats?.planTiles;
+  const planSeeds = result.stats?.planSeedCount;
+  const planTargets = result.stats?.planTargetCount;
+  const planVisited =
+    planExpanded !== undefined && planTiles !== undefined && planTiles > 0
+      ? `, planVisited=${planExpanded}/${planTiles}`
+      : "";
+  const planCounts =
+    planSeeds !== undefined && planTargets !== undefined
+      ? `, seeds=${planSeeds}, targets=${planTargets}`
+      : "";
+  const pfStage =
+    pfTotal !== undefined &&
+    pfPlan !== undefined &&
+    pfMask !== undefined &&
+    pfRefine !== undefined
+      ? `, pf=${pfTotal.toFixed(2)}ms (plan=${pfPlan.toFixed(2)}ms${planVisited}${planCounts}, mask=${pfMask.toFixed(2)}ms, refine=${pfRefine.toFixed(2)}ms${pfFallback && pfFallback > 0 ? `, fallback=${pfFallback.toFixed(2)}ms` : ""})`
+      : "";
+
   if (gm.isWater(startTile)) {
     const path = [...result.path, dstShore];
     console.log(
-      `boatPathFromTileToShore: ${duration.toFixed(2)}ms, steps=${Math.max(
-        0,
-        path.length - 1,
-      )}`,
+      `boatPathFromTileToShore: ${duration.toFixed(2)}ms${pfStage}, src=${fmtTile(gm, result.source)}, dst=${fmtTile(gm, dstShore)}, steps=${Math.max(0, path.length - 1)}, visited=${expanded}/${totalTiles} (${visitedPct.toFixed(2)}%), enqueued=${enqueued}, maskExp=${result.stats?.maskExpansions ?? 0}`,
     );
     return path;
   }
   const path = [startTile, ...result.path, dstShore];
   console.log(
-    `boatPathFromTileToShore: ${duration.toFixed(2)}ms, steps=${Math.max(
-      0,
-      path.length - 1,
-    )}`,
+    `boatPathFromTileToShore: ${duration.toFixed(2)}ms${pfStage}, src=${fmtTile(gm, result.source)}, dst=${fmtTile(gm, dstShore)}, steps=${Math.max(0, path.length - 1)}, visited=${expanded}/${totalTiles} (${visitedPct.toFixed(2)}%), enqueued=${enqueued}, maskExp=${result.stats?.maskExpansions ?? 0}`,
   );
   return path;
 }
@@ -286,21 +321,44 @@ export function boatPathFromTileToWater(
   const duration = performance.now() - startTime;
   if (result === null) return null;
 
+  const totalTiles = gm.width() * gm.height();
+  const expanded = result.stats?.expanded ?? 0;
+  const enqueued = result.stats?.enqueued ?? 0;
+  const visitedPct = totalTiles > 0 ? (expanded / totalTiles) * 100 : 0;
+  const pfTotal = result.stats?.totalMs;
+  const pfPlan = result.stats?.planMs;
+  const pfMask = result.stats?.maskMs;
+  const pfRefine = result.stats?.refineMs;
+  const pfFallback = result.stats?.fallbackMs;
+  const planExpanded = result.stats?.planExpanded;
+  const planTiles = result.stats?.planTiles;
+  const planSeeds = result.stats?.planSeedCount;
+  const planTargets = result.stats?.planTargetCount;
+  const planVisited =
+    planExpanded !== undefined && planTiles !== undefined && planTiles > 0
+      ? `, planVisited=${planExpanded}/${planTiles}`
+      : "";
+  const planCounts =
+    planSeeds !== undefined && planTargets !== undefined
+      ? `, seeds=${planSeeds}, targets=${planTargets}`
+      : "";
+  const pfStage =
+    pfTotal !== undefined &&
+    pfPlan !== undefined &&
+    pfMask !== undefined &&
+    pfRefine !== undefined
+      ? `, pf=${pfTotal.toFixed(2)}ms (plan=${pfPlan.toFixed(2)}ms${planVisited}${planCounts}, mask=${pfMask.toFixed(2)}ms, refine=${pfRefine.toFixed(2)}ms${pfFallback && pfFallback > 0 ? `, fallback=${pfFallback.toFixed(2)}ms` : ""})`
+      : "";
+
   if (gm.isWater(startTile)) {
     console.log(
-      `boatPathFromTileToWater: ${duration.toFixed(2)}ms, steps=${Math.max(
-        0,
-        result.path.length - 1,
-      )}`,
+      `boatPathFromTileToWater: ${duration.toFixed(2)}ms${pfStage}, src=${fmtTile(gm, result.source)}, dst=${fmtTile(gm, dstWater)}, steps=${Math.max(0, result.path.length - 1)}, visited=${expanded}/${totalTiles} (${visitedPct.toFixed(2)}%), enqueued=${enqueued}, maskExp=${result.stats?.maskExpansions ?? 0}`,
     );
     return result.path;
   }
   const path = [startTile, ...result.path];
   console.log(
-    `boatPathFromTileToWater: ${duration.toFixed(2)}ms, steps=${Math.max(
-      0,
-      path.length - 1,
-    )}`,
+    `boatPathFromTileToWater: ${duration.toFixed(2)}ms${pfStage}, src=${fmtTile(gm, result.source)}, dst=${fmtTile(gm, dstWater)}, steps=${Math.max(0, path.length - 1)}, visited=${expanded}/${totalTiles} (${visitedPct.toFixed(2)}%), enqueued=${enqueued}, maskExp=${result.stats?.maskExpansions ?? 0}`,
   );
   return path;
 }
@@ -412,14 +470,60 @@ export function bestTransportShipRoute(
   const dst = pickLandingForTargetWater(gm, clickTile, result.target, targetShores);
   if (dst === null) return false;
 
+  const totalTiles = gm.width() * gm.height();
+  const expanded = result.stats?.expanded ?? 0;
+  const enqueued = result.stats?.enqueued ?? 0;
+  const visitedPct = totalTiles > 0 ? (expanded / totalTiles) * 100 : 0;
+  const pfTotal = result.stats?.totalMs;
+  const pfPlan = result.stats?.planMs;
+  const pfMask = result.stats?.maskMs;
+  const pfRefine = result.stats?.refineMs;
+  const pfFallback = result.stats?.fallbackMs;
+  const planExpanded = result.stats?.planExpanded;
+  const planTiles = result.stats?.planTiles;
+  const planSeeds = result.stats?.planSeedCount;
+  const planTargets = result.stats?.planTargetCount;
+  const planVisited =
+    planExpanded !== undefined && planTiles !== undefined && planTiles > 0
+      ? `, planVisited=${planExpanded}/${planTiles}`
+      : "";
+  const planCounts =
+    planSeeds !== undefined && planTargets !== undefined
+      ? `, seeds=${planSeeds}, targets=${planTargets}`
+      : "";
+  const pfStage =
+    pfTotal !== undefined &&
+    pfPlan !== undefined &&
+    pfMask !== undefined &&
+    pfRefine !== undefined
+      ? `, pf=${pfTotal.toFixed(2)}ms (plan=${pfPlan.toFixed(2)}ms${planVisited}${planCounts}, mask=${pfMask.toFixed(2)}ms, refine=${pfRefine.toFixed(2)}ms${pfFallback && pfFallback > 0 ? `, fallback=${pfFallback.toFixed(2)}ms` : ""})`
+      : "";
+
   const src = result.source;
   // Full route includes the shore endpoints to drive unit movement.
   const path = [src, ...result.path, dst];
   console.log(
-    `bestTransportShipRoute: ${duration.toFixed(2)}ms, steps=${Math.max(
-      0,
-      path.length - 1,
-    )}`,
+    `bestTransportShipRoute: ${duration.toFixed(2)}ms${pfStage}, src=${fmtTile(gm, src)}, dst=${fmtTile(gm, dst)}, steps=${Math.max(0, path.length - 1)}, visited=${expanded}/${totalTiles} (${visitedPct.toFixed(2)}%), enqueued=${enqueued}, maskExp=${result.stats?.maskExpansions ?? 0}`,
+  );
+  const mapKeyLower = mapKeyLowerFromConfig(gm);
+  console.log(
+    `bestTransportShipRouteRepro: ${JSON.stringify({
+      map: mapKeyLower,
+      fine: { w: gm.width(), h: gm.height() },
+      coarse: { w: gm.miniMap().width(), h: gm.miniMap().height() },
+      click: { x: gm.x(clickTile), y: gm.y(clickTile) },
+      src: { x: gm.x(src), y: gm.y(src) },
+      targetWater: { x: gm.x(result.target), y: gm.y(result.target) },
+      dst: { x: gm.x(dst), y: gm.y(dst) },
+      seedWater: seedNodesFiltered.map((n, i) => [
+        gm.x(n),
+        gm.y(n),
+        gm.x(seedOriginsFiltered[i]!),
+        gm.y(seedOriginsFiltered[i]!),
+      ]),
+      targetWaterList: targetWaterFiltered.map((t) => [gm.x(t), gm.y(t)]),
+      fallbackMs: result.stats?.fallbackMs ?? 0,
+    })}`,
   );
   return { src, dst, path };
 }
