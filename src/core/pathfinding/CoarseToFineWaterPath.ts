@@ -180,13 +180,29 @@ function widenAllowedByVisitedRing(
   return count;
 }
 
+function microMapOrNull(gm: GameMap): GameMap | null {
+  const mm = (gm as any).microMap;
+  if (typeof mm === "function") return mm.call(gm) as GameMap;
+  return null;
+}
+
+function miniMapOrNull(gm: GameMap): GameMap | null {
+  const mm = (gm as any).miniMap;
+  if (typeof mm === "function") return mm.call(gm) as GameMap;
+  return null;
+}
+
+function defaultCoarseMapOrNull(fineMap: GameMap): GameMap | null {
+  return microMapOrNull(fineMap) ?? miniMapOrNull(fineMap);
+}
+
 export function findWaterPathFromSeedsCoarseToFine(
   fineMap: GameMap,
   seedNodes: readonly TileRef[],
   seedOrigins: readonly TileRef[],
   targets: readonly TileRef[],
   bfsOpts: MultiSourceAnyTargetBFSOptions = {},
-  coarseMap: GameMap | null = null,
+  coarseMap?: GameMap | null,
   coarseToFine: CoarseToFineWaterPathOptions = {},
 ): MultiSourceAnyTargetBFSResult | null {
   const totalStart = performance.now();
@@ -230,7 +246,10 @@ export function findWaterPathFromSeedsCoarseToFine(
     return result;
   };
 
-  if (!coarseMap) {
+  const resolvedCoarseMap =
+    coarseMap === undefined ? defaultCoarseMapOrNull(fineMap) : coarseMap;
+
+  if (!resolvedCoarseMap) {
     const result = fineBfs.findWaterPathFromSeeds(
       fineMap,
       seedNodes,
@@ -248,7 +267,7 @@ export function findWaterPathFromSeedsCoarseToFine(
     });
   }
 
-  const mapping = getFineToCoarseMapping(fineMap, coarseMap);
+  const mapping = getFineToCoarseMapping(fineMap, resolvedCoarseMap);
   if (mapping === null) {
     const result = fineBfs.findWaterPathFromSeeds(
       fineMap,
@@ -267,9 +286,9 @@ export function findWaterPathFromSeedsCoarseToFine(
     });
   }
 
-  const coarseWidth = coarseMap.width();
-  const coarseHeight = coarseMap.height();
-  const coarseStampSet = getStampSet(coarseMap);
+  const coarseWidth = resolvedCoarseMap.width();
+  const coarseHeight = resolvedCoarseMap.height();
+  const coarseStampSet = getStampSet(resolvedCoarseMap);
   const coarseSeedStamp = nextStamp(coarseStampSet);
   const coarseTargetStamp = nextStamp(coarseStampSet);
 
@@ -314,10 +333,10 @@ export function findWaterPathFromSeedsCoarseToFine(
   }
 
   // Coarse solve (cheap) to define a corridor.
-  const coarseBfs = getBfs(coarseMap);
+  const coarseBfs = getBfs(resolvedCoarseMap);
   const planStart = performance.now();
   const coarseResult = coarseBfs.findWaterPath(
-    coarseMap,
+    resolvedCoarseMap,
     coarseSeeds,
     coarseTargets,
     bfsOpts,
@@ -358,7 +377,7 @@ export function findWaterPathFromSeedsCoarseToFine(
   const maxAttempts = Math.max(1, coarseToFine.maxAttempts ?? 6);
 
   // Allowed corridor stamp is stable across attempts (widening is cumulative).
-  const allowedSet = getStampSet(coarseMap);
+  const allowedSet = getStampSet(resolvedCoarseMap);
   const allowed = nextStamp(allowedSet);
   const maskStart = performance.now();
   markCoarseCorridor(
@@ -371,7 +390,7 @@ export function findWaterPathFromSeedsCoarseToFine(
   );
   const maskMs = performance.now() - maskStart;
 
-  const visitedSet = getVisitedStampSet(coarseMap);
+  const visitedSet = getVisitedStampSet(resolvedCoarseMap);
   let expansionsLeft = maxAttempts - 1;
   const visitedMask = {
     tileToRegion: mapping.fineToCoarse,

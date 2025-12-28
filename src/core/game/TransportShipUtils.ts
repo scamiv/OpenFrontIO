@@ -15,6 +15,16 @@ function miniMapOrNull(gm: GameMap): GameMap | null {
   return null;
 }
 
+function microMapOrNull(gm: GameMap): GameMap | null {
+  const mm = (gm as any).microMap;
+  if (typeof mm === "function") return mm.call(gm) as GameMap;
+  return null;
+}
+
+function coarseBoatMapOrNull(gm: GameMap): GameMap | null {
+  return microMapOrNull(gm) ?? miniMapOrNull(gm);
+}
+
 function mapKeyLowerFromConfig(gm: Game): string | null {
   const map = gm.config().gameConfig().gameMap;
   const key = Object.keys(GameMapType).find(
@@ -221,7 +231,7 @@ export function boatPathFromTileToShore(
       kingMoves: true,
       noCornerCutting: true,
     },
-    miniMapOrNull(gm),
+    coarseBoatMapOrNull(gm),
   );
   const duration = performance.now() - startTime;
   if (result === null) return null;
@@ -316,7 +326,7 @@ export function boatPathFromTileToWater(
       kingMoves: true,
       noCornerCutting: true,
     },
-    miniMapOrNull(gm),
+    coarseBoatMapOrNull(gm),
   );
   const duration = performance.now() - startTime;
   if (result === null) return null;
@@ -453,6 +463,7 @@ export function bestTransportShipRoute(
   if (targetWaterFiltered.length === 0) return false;
 
   const startTime = performance.now();
+  const coarse = gm.microMap();
   const result = findWaterPathFromSeedsCoarseToFine(
     gm,
     seedNodesFiltered,
@@ -462,7 +473,7 @@ export function bestTransportShipRoute(
       kingMoves: true,
       noCornerCutting: true,
     },
-    gm.miniMap(),
+    coarse,
   );
   const duration = performance.now() - startTime;
   if (result === null) return false;
@@ -510,7 +521,7 @@ export function bestTransportShipRoute(
     `bestTransportShipRouteRepro: ${JSON.stringify({
       map: mapKeyLower,
       fine: { w: gm.width(), h: gm.height() },
-      coarse: { w: gm.miniMap().width(), h: gm.miniMap().height() },
+      coarse: { w: coarse.width(), h: coarse.height() },
       click: { x: gm.x(clickTile), y: gm.y(clickTile) },
       src: { x: gm.x(src), y: gm.y(src) },
       targetWater: { x: gm.x(result.target), y: gm.y(result.target) },
