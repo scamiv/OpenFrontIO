@@ -1,4 +1,4 @@
-# Water pathfinding evolution (from `main` → `lazy-theta`) — core developer notes
+# Water pathfinding evolution — developer notes
 
 This doc is the “how it actually works” companion to `pathingReworkDocs/PathfindingEvolution.md`.
 It’s organized as:

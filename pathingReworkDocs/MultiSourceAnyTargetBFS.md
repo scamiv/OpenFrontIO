@@ -1,49 +1,67 @@
-# MultiSourceAnyTargetBFS (boats) — design notes
+# Multi-source / any-target BFS (boat water routing)
 
-## What we’re doing
+This is the core pathfinding primitive used by transport boats, trade ships, and warships.
+Implementation lives in `src/core/pathfinding/MultiSourceAnyTargetBFS.ts`.
 
-Boat routing is now a single, sound **multi-source / any-target** shortest-path solve on a **water-only** grid.
-For equal cost edges, that’s just **BFS**.
+## Problem statement
 
-The mental model is the classic “virtual super-source / super-target” trick:
+Given:
+- a set of source water tiles (seeds)
+- a set of destination water tiles (targets)
+- boat movement rules (8-neighbor “king moves” + no corner cutting)
 
-- Pretend there is a `START` node with 0-cost edges to every source `S`.
-- Pretend every target `D` has a 0-cost edge to an `END` node.
-- Run shortest path `START → END`.
+Find the shortest **water-only** path from *any* seed to *any* target.
+All edges cost the same, so **BFS is optimal**.
 
-We don’t build those nodes: we seed the queue with all sources, and we stop when we **dequeue** any target.
+## Why this (and why it replaces the old “multi-stage floodfill”)
 
-## API shape
+- “Multiple destinations” here really means **any destination**. We stop at the first target reached in BFS order.
+- Multi-source BFS solves “many starts → any goal” in a **single pass**. Doing one floodfill per source/target is wasted work.
+- We keep correctness simple (BFS) and get performance from **pruning** (water components, coarse corridor masks), not from heuristic hacks.
 
-Return value: `{ source, target, path } | null`
+## API and contract
 
-- `source`: which seed-origin won (useful when seeds are water-adjacent tiles but the origin is a shore tile).
-- `target`: the water tile we reached (usually adjacent to the chosen landing shore).
-- `path`: water path as a list of `TileRef` to cache and replay (no per-tick pathfinding).
+Primary entry points:
+- `findWaterPathFromSeeds(gm, seedNodes, seedOrigins, targets, opts)`
+- `findWaterPathFromSeedsMaskExpanding(..., onQueueEmpty)` (used by coarse-to-fine; see `pathingReworkDocs/MaskExpanding.md`)
+
+Return type: `{ source, target, path } | null`
+- `source`: the winning seed origin (typically a shore tile associated with the seed water tile)
+- `target`: the reached target water tile
+- `path`: contiguous list of water `TileRef` from the chosen seed to the target
+
+Correctness invariant: **goal test happens on dequeue**, not on discovery. That’s what makes the path length truly minimal with multiple sources.
 
 ## Movement model (boats)
 
-- Traversal: `gm.isWater(tile)` only.
-- Neighbors: **king moves** (8-neighbor / Chebyshev) by default.
-- No-corner-cutting: diagonal is only allowed if both touching orthogonals are water.
-- All moves cost 1, so BFS is optimal.
+- Traversal is `gm.isWater(tile)` only.
+- Neighbors are 8-directional (“king moves”) by default.
+- With `noCornerCutting`, a diagonal move is allowed only if both touching orthogonals are water.
+- Each move costs 1, so BFS gives the shortest path under these rules.
 
-## Performance wins (the non-negotiables)
+## How it is implemented (hot-path constraints)
 
-- Use typed arrays + stamps (no `Set`/`Map` in the inner loop).
-- **Precompute water-body component IDs** once per map instance (`WaterComponents.ts`) and filter sources/targets:
-  - If source component ≠ target component, skip it (ocean vs lake becomes O(1) reject).
-  - This makes “impossible” routes cheap and lets us delete hacky visited-count early exits.
+The implementation is built for “called a lot”:
+- Typed arrays for `visitedStamp`, `prev`, `startOf`, and `targetStamp`.
+- Stamp counters (no full-array clears) for visited/target membership.
+- `WeakMap<GameMap, MultiSourceAnyTargetBFS>` caching so buffers are reused per map instance.
 
-## How this integrates (transport/trade/warships)
+High level:
+1) Stamp all targets into `targetStamp`.
+2) Push all valid seeds into the queue (water + allowed by mask + not already visited) and record their origin in `startOf`.
+3) Standard BFS loop:
+   - pop `node`
+   - if `node` is a target: reconstruct via `prev[]` and return
+   - otherwise expand neighbors, applying movement rules + optional masks
 
-- Destination selection stays “near click”: pick a bounded set of landing shore candidates, then convert to adjacent water targets.
-- Source selection stays bounded (sampling/extrema/etc), then convert to adjacent water seeds.
-- Compute the route once on launch/init, cache `path`, and only advance an index during ticks.
-- Retreat follows the existing cached path backwards (no recompute).
+## O(1) “impossible route” reject via water components
 
-## Current known waste
+`src/core/pathfinding/WaterComponents.ts` precomputes connected-component IDs for each `GameMap` instance.
+Call sites should filter seed/target candidates to the same water component first (ocean vs lake becomes a constant-time reject).
+This replaced earlier “visited-count early exits” that were both brittle and incorrect.
 
-If the client pre-queries and the server recomputes, you will see two searches for a single action.
-We should ensure we only do one solve per user action (exact mechanism TBD: remove the pre-query, or reuse/publish the computed route).
+## Integration notes (transport/trade/warship)
 
+- Keep seeds/targets bounded (sample shores/ports) before calling BFS; runtime is proportional to visited tiles.
+- Compute once on intent/launch, cache the returned `path`, and advance an index during ticks.
+- Retreat should reuse the cached `path` in reverse (no recompute).

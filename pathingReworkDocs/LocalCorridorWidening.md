@@ -1,107 +1,67 @@
-# Local corridor widening (adaptive coarse-to-fine water pathfinding, adaptive constraint relaxation)
+# Visited-driven corridor widening (local relaxation rule)
 
-Goal: keep the coarse corridor win, but avoid the current “corridor fails → global full-res BFS” cliff.
+This document describes the widening rule used by coarse-to-fine water routing to repair a corridor when it is too tight.
+The implementation lives in `src/core/pathfinding/CoarseToFineWaterPath.ts` (the widen callback) and is driven by `visitedMaskOut` from `src/core/pathfinding/MultiSourceAnyTargetBFS.ts`.
 
-Local widening behaves like a cheap BSP refinement:
+## The failure mode we’re fixing
 
-- start with a narrow corridor (fast)
-- if it fails, expand *only where it matters* (still fast)
-- only as a last resort, drop the mask entirely
+Coarse-to-fine works by restricting the fine search to a coarse corridor.
+If the coarse map lies (optimistic water, minimap tearing), the fine search can fail even though a valid path exists.
 
-This is intended to be a generic wrapper around `MultiSourceAnyTargetBFS` (used by transport/trade/warship).
+The naive response is “drop the mask and run an unrestricted fine BFS”, but that’s the cliff we want to avoid:
+one small abstraction error should not trigger an ocean-sized floodfill.
 
-## Inputs / outputs
+## Key observation
 
-Inputs:
-- `fineMap: GameMap`
-- `coarseMap: GameMap` (typically `map16x`)
-- `seedNodes[]`, `seedOrigins[]` (multi-source)
-- `targets[]` (any-target)
-- `bfsOpts` (king moves, no-corner-cutting, etc.)
-- initial corridor radius `r0`, max attempts `k`
+When a constrained fine search fails, it still did useful work:
+it discovered exactly which parts of the corridor were reachable.
 
-Output:
-- `{ source, target, path }` like `MultiSourceAnyTargetBFSResult`, or `null`
+So the corridor repair step should expand **around where the fine search actually went**,
+not around the original coarse spine/path.
 
-## Baseline (what we have today)
+## What we track
 
-1) Coarse BFS to get `coarsePath`
-2) Corridor = inflate `coarsePath` by radius `r`
-3) Fine BFS restricted by corridor mask
-4) If fail: widen radius globally or fall back to unrestricted fine BFS
+We maintain two stamp sets on the coarse grid:
 
-Problem: a tiny lie in the coarse map (optimistic water) can cause step (4) to explode to “search the whole ocean”.
+1) **Allowed corridor** (cumulative)
+- `allowedCoarseStamp[coarseCell] === allowed` means the coarse cell is currently allowed
+- once allowed, it stays allowed for the rest of the solve
 
-## Local widening: two practical variants
+2) **Visited regions** (per phase)
+- `visitedCoarseStamp[coarseCell] === visited` means some fine tile mapping to this coarse cell was visited in the current phase
+- this is reset between widening steps by incrementing the stamp
 
-### Variant A (chosen): widen around visited coarse regions
+“Phase” here means: one contiguous run of the fine BFS under a fixed allowed mask.
 
-If fine BFS fails inside the corridor, we already know *where it was trying*.
+## Widening rule (the actual algorithm)
 
-Implementation sketch:
+When the fine queue exhausts:
+1) Collect the set of coarse cells marked as visited in the last phase.
+2) For each such coarse cell, mark its 8 neighbors as allowed (Chebyshev ring).
+3) Return the list of newly allowed coarse cells so the fine search can resume/activate them.
+4) Reset visited tracking for the next phase.
 
-1) Build initial corridor mask: `allowedCoarse[coarseCell] = true`.
-2) Run fine BFS with `allowedMask` = coarse corridor.
-3) If it succeeds: done.
-4) If it fails:
-   - compute `visitedCoarse`: all coarse cells that were actually visited by fine BFS
-   - expand corridor by 1 ring around `visitedCoarse` (Chebyshev ring, since king moves)
-   - retry fine BFS
-5) Repeat up to `k` times.
-6) If still no path: unrestricted fine BFS fallback (correctness guardrail).
+Why a Chebyshev ring:
+- boats use king moves; the corridor should widen symmetrically in the same geometry.
 
-Clarification: widening is cumulative. Each failed attempt expands around that attempt’s `visitedCoarse`, and newly allowed coarse cells stay allowed across subsequent attempts (via the same `allowedCoarseStamp`).
+Clarification (important for reviewers):
+Widening is cumulative. Each phase widens around *that phase’s* visited set, but newly allowed cells stay allowed across later phases (via `allowedCoarseStamp`).
 
-Why it works:
-- you only “pay more” near the constriction you hit
-- open-ocean cells that were never approached don’t get unlocked
+## How visited regions are collected cheaply
 
-What “visitedCoarse” means (cheaply):
-- while expanding fine BFS, map `fineTile -> coarseCell` (precomputed `fineToCoarse[]`)
-- stamp `visitedCoarseStamp[coarseCell] = stamp` when the BFS pops/visits a tile
+`MultiSourceAnyTargetBFS` supports a `visitedMaskOut` option:
+- `visitedMaskOut.tileToRegion` is the `fineToCoarse` mapping
+- each time a fine tile is visited, it stamps the corresponding coarse cell
 
-How to expand by one ring:
-- for each coarse cell in `visitedCoarse`, mark its 8 neighbors as allowed
-- use stamps, not `Set`, to avoid allocations
+This gives us “where the search pushed” without any allocations (`Set`/`Map`) and without scanning the fine grid.
 
-### Variant B (not chosen): widen only along the coarse path segment you reached
+## Guardrails
 
-Similar, but tighter:
-- intersect `visitedCoarse` with the original `coarsePath` (or the prefix that’s reachable)
-- widen only around that subset
+- Widening is capped (`maxAttempts`) to keep worst-case costs predictable.
+- If widening can’t repair the corridor, we always fall back to unrestricted fine BFS to preserve correctness.
 
-This can be even cheaper on huge corridors, but is easier to get wrong (requires careful “prefix” reasoning).
+## Where this is used today
 
-## Hot-path constraints (don’t regress perf)
-
-- No per-call allocations in the inner BFS loop.
-- Use stamp arrays:
-  - `allowedCoarseStamp[coarseCell]`
-  - `visitedCoarseStamp[coarseCell]`
-- Reuse `MultiSourceAnyTargetBFS` instances via `WeakMap<GameMap, MultiSourceAnyTargetBFS>`.
-- Keep attempt count small (`k = 2..4`).
-
-## Correctness guardrails
-
-- Coarse map is approximate: coarse success never guarantees fine success.
-- Local widening can still miss a path if the corridor is too wrong; that’s fine:
-  - always end with an unrestricted fine BFS fallback
-- Preserve current move rules:
-  - king moves (8-neighbor)
-  - no-corner-cutting
-
-## Suggested defaults
-
-- `r0 = 1..2` coarse cells (start tight)
-- `k = 3` (initial + 2 widen steps)
-- widen step = +1 ring around `visitedCoarse`
-- final fallback = unrestricted fine BFS
-
-## Where this plugs in
-
-Replace the current “attempt loop that only increases radius globally” inside coarse-to-fine helper with:
-
-- attempt loop driven by `visitedCoarse`
-- optional “global radius bump” as a last attempt before full fallback
-
-This keeps the interface identical for all callsites (transport/trade/warship), but makes “tight corridor” failures cheap.
+The current refine stage uses “mask-expanding BFS” (no restart) and calls this widening rule when the queue empties:
+- see `pathingReworkDocs/MaskExpanding.md`
+- see `src/core/pathfinding/CoarseToFineWaterPath.ts` for the wiring

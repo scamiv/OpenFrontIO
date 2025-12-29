@@ -1,145 +1,81 @@
-# Mask-expanding BFS (adaptive corridor refinement, no restart)
+# Mask-expanding BFS (resume under a widening corridor)
 
-Purpose: keep the “coarse corridor” win, but avoid repeated **restart + re-walk** churn when the corridor is too tight.
+This document describes the refine-stage search used by coarse-to-fine: a BFS that runs under an allowed-region mask and can continue when that mask is widened.
 
-This is the "performance-first" sibling of:
-- `pathingReworkDocs/CoarseToFine.md` (coarse corridor + safe fallback)
-- `pathingReworkDocs/LocalCorridorWidening.md` (visited-driven local relaxation)
+Implementation: `MultiSourceAnyTargetBFS.findWaterPathFromSeedsMaskExpanding(...)` in `src/core/pathfinding/MultiSourceAnyTargetBFS.ts`.
 
-Key idea: run one fine-res search; if the queue exhausts because the corridor is too restrictive, **expand the mask and keep going** without clearing the fine BFS state.
+## Why this exists
 
-## What changes (vs restart-based local widening)
+We already have a robust corridor repair rule (“visited-driven widening”, see `pathingReworkDocs/LocalCorridorWidening.md`).
+The remaining performance problem was *restart churn*:
 
-Today (A2-style):
-- attempt = run fine BFS inside current mask
-- on failure: widen mask, **restart** fine BFS (visited/prev cleared via new stamp)
+- run fine BFS under a corridor
+- corridor too tight → widen corridor
+- restart fine BFS from scratch
 
-No-restart:
-- run fine BFS inside current mask
-- on queue empty: widen mask, **resume** fine BFS (keep visited/prev/queue state)
+Restarting re-enqueues and re-walks the same fine tiles over and over on “almost correct” corridors.
+That’s wasted work in exactly the case we’re trying to optimize.
 
-This avoids re-enqueueing and re-walking large already-explored areas on “almost works” corridors.
+## Key invariant (what makes resuming safe)
 
-## Correctness note (don’t hand-wave)
+Mask expansion is monotonic:
+- the allowed set only grows
+- already visited tiles remain valid
 
-Naively resuming a FIFO BFS after expanding the allowed set can change shortest-path guarantees, because newly-allowed tiles might introduce shorter routes to areas you already visited.
+Invariant: once a fine tile is marked visited, it is never “unvisited” again — mask expansion only enables additional neighbors/regions and never invalidates already visited tiles.
 
-Invariant: once a fine tile is marked visited, it is never “unvisited” again — mask expansion only enables additional neighbors/regions and never invalidates already-visited tiles. This is why the fast variant remains sound (valid path) and why we can justify not clearing `visitedStamp` when expanding the mask.
+This is why we can resume without clearing `visitedStamp`.
 
-Two viable interpretations:
+### Important trade-off
 
-1) **Fast variant (good enough for corridor repair):**
-   - accept that expanding the mask mid-run can produce a path that is not strictly shortest in the *final* expanded region
-    - still produces a valid path and is often much faster
+Because the graph changes mid-run (more nodes become allowed), resuming a FIFO BFS is not guaranteed to return the globally shortest path in the *final* expanded allowed set.
 
-2) **Optimal variant (paper-grade):**
-   - track `dist[tile]` (or level) and allow “relaxation” when new tiles become allowed
-   - process newly enabled nodes in non-decreasing distance (Dial/bucket queue or heap)
-   - guarantees shortest path in the final allowed region
+For our use this is acceptable:
+- the corridor is a heuristic bound anyway (we’re already not searching the whole ocean)
+- we primarily want “valid + cheap” corridor repair
+- correctness is still guarded by the unconditional unrestricted fine BFS fallback
 
-For OpenFront boats, the fast variant may already be acceptable because the corridor is a heuristic bound anyway; if we care about strict optimality, use the optimal variant.
+If we ever need strict shortest paths under the final expanded mask, we can implement the “optimal” variant (see “If we needed optimality” below).
 
-This doc describes the implementation in a way that supports either, with minimal extra plumbing.
+## How the implementation works
 
-## Groundwork we already have
+Inputs:
+- `allowedMask`: `{ tileToRegion, regionStamp, stamp }`
+  - `tileToRegion` is usually `fineToCoarse`
+  - `regionStamp[region] === stamp` means that region is currently allowed
+- `onQueueEmpty(outNewlyAllowedRegions)`: callback that widens the mask in-place and returns how many regions became newly allowed
 
-From existing coarse-to-fine:
-- `fineToCoarse: Uint32Array` mapping
-- `allowedMask` as `(tileToRegion, regionStamp, stamp)` using stamps
+During neighbor expansion:
+1) If a neighbor is water and unvisited:
+   - if its region is allowed → visit + enqueue
+   - otherwise → defer it
 
-From `LocalCorridorWidening` implementation:
-- `visitedMaskOut` to collect “which coarse regions were actually explored” in a failed attempt
-- widening by 1-ring around visited coarse regions, cumulative
+### Deferring without allocations (region-local frontier lists)
 
-We reuse that exact widening rule; the only change is: don’t restart the fine search.
+Deferral is implemented as “per-region linked lists” in typed arrays:
+- `regionHead[region]` points at the head of a linked list of deferred fine tiles in that region
+- `deferredNext[tile]` links the list
+- `deferredPrev[tile]` stores the predecessor tile so we can set `prev[]` correctly when the tile becomes reachable
 
-## Data structures (recommended)
+When the queue exhausts:
+1) `onQueueEmpty(outNewlyAllowedRegions)` widens the corridor and returns the newly allowed regions.
+2) For each newly allowed region, we pop its deferred list and enqueue any tiles that are still unvisited.
 
-Inside `MultiSourceAnyTargetBFS` (or a sibling specialized class):
-- `visitedStamp[tile]` (already exists)
-- `prev[tile]` (already exists)
-- `startOf[tile]` (already exists)
-- `queue[]`, `head`, `tail` (already exists)
+This is the main win: activating new frontier nodes is O(newlyAllowedRegions + deferredInThoseRegions), not O(allVisitedFineTiles).
 
-Additionally for the optimal variant:
-- `dist[tile]: Int32Array` (init -1; set on visit)
-- `deferred[]` or a bucket/heap for nodes that become enabled later
+## How this is used by coarse-to-fine
 
-Mask tracking:
-- `allowedCoarseStamp[coarseCell]` (cumulative allowed regions)
-- `visitedCoarseStamp[coarseCell]` (per-expansion snapshot; used to widen)
+`src/core/pathfinding/CoarseToFineWaterPath.ts` wires this together:
+- coarse plan builds an initial corridor mask (stamps)
+- fine refine runs `findWaterPathFromSeedsMaskExpanding(...)` under that mask
+- when the queue empties, the callback widens the corridor by one ring around the coarse regions visited in the last phase
+- widening is capped; final fallback is unrestricted fine BFS
 
-## Core loop (fast variant)
+## If we needed optimality later
 
-Pseudocode:
+If we ever decide “the path must be shortest under the final expanded allowed set”, the clean approach is to switch from plain FIFO BFS to a monotone distance queue:
+- track `dist[tile]`
+- when new nodes become enabled, allow relaxations (`nd = dist[cur] + 1`)
+- process nodes in non-decreasing distance (bucket/Dial queue works because edge weights are 1)
 
-1) Build initial allowed mask from coarse spine corridor (`r0`).
-2) Seed BFS queue from fine seedNodes filtered by allowed mask.
-3) Run BFS:
-   - when exploring neighbors:
-     - if neighbor is blocked by allowed mask: **skip** (but see below)
-     - otherwise visit/enqueue as usual
-4) When `head == tail` (queue empty):
-   - widen `allowedCoarseStamp` by 1 ring around `visitedCoarseStamp` from the last phase
-   - **activate newly enabled frontier nodes**:
-     - for each visited fine tile, re-check its neighbors that were previously mask-blocked
-     - enqueue any newly-allowed, unvisited neighbors
-   - continue BFS
-5) Stop when a target is dequeued.
-
-The only missing piece is “activate newly enabled frontier nodes” efficiently.
-
-### Frontier activation strategies
-
-**Strategy F1 (simple, may be OK):**
-- keep an `Int32Array deferredTiles` of “neighbor candidates that were blocked by mask”
-- when mask widens, scan deferredTiles and enqueue those that are now allowed
-- keep deferredTiles deduped via a stamp array to avoid blowup
-
-**Strategy F2 (faster, more code):**
-- maintain a per-coarse-region list of deferred fine tiles
-- when a coarse region becomes allowed, enqueue only tiles in that region’s list
-
-F2 is the “hot path” answer; F1 is the “get it working + measure” answer.
-
-## Core loop (optimal variant)
-
-If we want shortest paths in the final expanded region, treat mask-expansion as adding nodes that can introduce shorter routes.
-
-Minimal way:
-- maintain `dist[tile]`
-- when a neighbor becomes newly allowed:
-  - `nd = dist[cur] + 1`
-  - if `dist[neighbor] == -1 || nd < dist[neighbor]`:
-    - update `dist`, `prev`, `startOf`
-    - push neighbor into a structure processed in increasing `dist`
-
-Implementation options:
-- bucket queue (Dial) since edge weights are 1
-- binary heap (slower constants, simpler reasoning)
-
-## Where this plugs in
-
-Implement as a variant of the current coarse-to-fine helper:
-
-- `findWaterPathFromSeedsMaskExpanding(...)` (fineMap + coarseMap + opts)
-- reuse the same `allowedMask` and the same visited-driven widening rule
-- keep the same guardrail: if expansions exceed `k`, fall back to unrestricted fine BFS
-
-This is a stepping stone to Spine & Portals:
-- This improves “corridor repair” without restarts
-- Spine & Portals changes the big-O by avoiding fine search over open water entirely
-
-## Suggested milestones
-
-1) Implement the fast variant with deferred frontier list (F1) and measure.
-2) If it helps but still shows spikes, upgrade frontier activation to F2.
-3) If strict optimality is needed, implement the optimal variant (dist + buckets/heap).
-
-## Note: depth-gated BFS (future)
-
-We can reuse the same “monotonic relaxation” idea for “prefer deep water” by adding a second passability mask like `gm.magnitude(tile) >= minDepth` and relaxing `minDepth` only if needed. This stays BFS-friendly (still unweighted), but changes the objective to “deepest-possible path, then shortest within that depth”; if we need strict shortest for the relaxed threshold, restart per-threshold or use the optimal semantics.
-
-## BSP-ish note
-
-Both mask expansion and depth-gating are “BSP-ish” in the same sense: they incrementally relax constraints (expand the allowed subset) without invalidating already explored space. This makes the search behave more like progressive partition refinement than a single global floodfill, even though we are not literally constructing a BSP tree.
+That is strictly more code and usually unnecessary for corridor repair, but it’s the upgrade path if we ever need it.

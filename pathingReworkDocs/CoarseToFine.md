@@ -1,71 +1,117 @@
-# Coarse-to-fine pathfinding (boats) — notes
+# Coarse-to-fine water routing (corridor + widening)
 
-## Why
+This document describes the current implementation in `src/core/pathfinding/CoarseToFineWaterPath.ts`.
 
-Full-res water BFS is optimal and simple, but the “ocean case” can still expand a lot of tiles.
-Coarse-to-fine is the next lever: do a cheap solve on a low-res map to guide / bound the expensive solve.
+## Why coarse-to-fine exists
 
-## We already have low-res maps
+A full-resolution BFS on water is simple and optimal, but it can still visit a huge number of tiles in “open ocean” cases.
+That makes ship launch / routing too expensive in the hot path.
 
-The terrain loader already ships multiple resolutions per map:
+We already ship downscaled maps (`map4x`, `map16x`), so we can:
+1) plan cheaply on a coarse map
+2) use that plan to bound the expensive fine search
 
-- `manifest.map` + `map.bin` (full res)
-- `manifest.map4x` + `map4x.bin` (coarser)
-- `manifest.map16x` + `map16x.bin` (even coarser)
+## One non-negotiable constraint
 
-At runtime we load:
+The coarse map is an approximation. It must never be able to make the final route incorrect.
 
-- `gameMap`: full res for normal games (or `map4x` for compact games)
-- `miniGameMap`: lower res (`map4x` for normal games, or `map16x` for compact games)
-- `microGameMap`: always `map16x` (in compact games this is the same instance as `miniGameMap`)
+So coarse-to-fine is designed as “guidance + guardrails”:
+- coarse planning proposes a corridor
+- fine planning is the authority (it produces the actual moves)
+- if the corridor is wrong, we widen it locally
+- if that still fails, we fall back to unrestricted fine BFS
 
-So we can prototype coarse-to-fine without extending mapgen first.
+## What maps we use
 
-## Core idea
+Coarse-to-fine works with any `(fineMap, coarseMap)` pair where the dimensions divide cleanly.
+In practice we use:
+- `fineMap`: the full-resolution boat navigation map (`gameMap`)
+- `coarseMap`: the 16x map (`microGameMap` / `map16x`) when available
 
-Stage 1 (coarse):
-- Run the same multi-source/any-target search on `miniGameMap` (BFS, water-only, king-moves if desired).
-- Result is a coarse path (or just a coarse distance field).
+The loader already provides `map`, `map4x`, and `map16x` (see `src/core/game/TerrainMapLoader.ts`).
 
-Stage 2 (refine):
-- Run full-res BFS on `gameMap`, but **restricted** by what stage 1 learned (a “corridor”) *or* guided by a coarse heuristic.
+## Implementation (step-by-step)
 
-Important: the coarse map is an approximation. It must never be allowed to make the final path invalid.
-If the refine stage fails inside the corridor, fall back to full-res BFS.
+### 1) Build the fine→coarse mapping
 
-## Option A: Coarse corridor (this)
+`getFineToCoarseMapping(fineMap, coarseMap)` returns:
+- `fineToCoarse[tile] = coarseCellIndex`
 
-1) Map fine tiles → coarse cells by integer scaling:
-   - `scaleX = gameMap.width / miniGameMap.width`
-   - `scaleY = gameMap.height / miniGameMap.height`
-2) Solve on coarse, get a coarse cell path.
-3) Inflate that path into a corridor:
-   - include all coarse cells within radius `r` of the coarse path (e.g. `r = 1..3` )(Manhattan or Chebyshev radius depending on move rules)
-4) Refine on full-res with a fast mask:
-   - `passableFine(tile) = gm.isWater(tile) && corridorMask[coarseOf(tile)]`
-5) If no path found, retry without the corridor (or inflate `r` and retry once).
+This mapping is the bridge for both:
+- corridor masking (`allowedMask`)
+- visited tracking (`visitedMaskOut`)
 
-Notes:
-- If the low-res generation is “optimistic” (water if any child tile is water), the coarse path can cut across land.
-  Inflation + fallback is what keeps this safe.
+### 2) Coarse plan (cheap)
 
-## Option B: Coarse heuristic for A* (future?)
+We map the fine seeds/targets to coarse cells and dedupe them:
+- `coarseSeeds = dedupe(fineSeeds.map(fineToCoarse))`
+- `coarseTargets = dedupe(fineTargets.map(fineToCoarse))`
 
-If we ever move from BFS → A* on full-res, a cheap heuristic is:
+Then we run the same unweighted search on the coarse map:
+- `coarseResult = coarseBfs.findWaterPath(coarseMap, coarseSeeds, coarseTargets, bfsOpts)`
 
-- Precompute `coarseDist[coarseCell]` by BFS on `miniGameMap` seeded from coarse targets.
-- Use `h(tile) = coarseDist[coarseOf(tile)] * min(scaleX, scaleY)`
+If the coarse plan fails, we immediately fall back to unrestricted fine BFS.
+This covers cases where the coarse map is conservative/loses connectivity.
 
-If the coarse map is “more passable” than the fine map (typical for minimaps), `coarseDist` tends to **underestimate**,
-which is admissible (safe) but not always very tight.
+### 3) Tighten the coarse path before masking
 
-## Where component IDs fit
+Naively inflating a coarse “staircase” path creates an unnecessarily fat corridor.
 
-Water-component IDs are still a free early reject:
+We run `rubberBandCoarsePath(coarseMap, coarseResult.path, bfsOpts)` which:
+- compresses the coarse path into line-of-sight waypoints
+- expands those straight segments back into a contiguous coarse-cell “spine”
 
-- `WaterComponents.ts` already precomputes IDs per `GameMap` instance.
-- Do the same check on `miniGameMap` if useful, but full-res component filtering already prevents the worst “wrong ocean” searches.
+This keeps the corridor narrow without changing correctness (coarse is guidance only).
 
-## Practical next steps 
- Measure: expansions + ms, before/after, on worst-case oceans.
- decide if mapgen needs a better “navmap” (e.g. conservative water, coastline preservation, etc.).
+### 4) Build the corridor mask (stamps)
+
+We mark “allowed” coarse cells in a stamp array:
+- `allowedStamp[coarseCell] === allowedStampValue` means “allowed”
+
+The corridor is:
+- all coarse cells within radius `r` of the spine
+- radius uses Chebyshev geometry (matches king moves)
+
+### 5) Fine refinement under the corridor (mask-expanding BFS)
+
+The refine stage uses:
+- `MultiSourceAnyTargetBFS.findWaterPathFromSeedsMaskExpanding(...)`
+- with `allowedMask` (corridor restriction)
+- and `visitedMaskOut` (to record which coarse regions were actually explored)
+
+If the corridor is correct, this produces the final fine path cheaply.
+
+### 6) Local widening when the queue exhausts
+
+When the fine BFS queue empties under the current mask, we “repair” the corridor:
+- compute `visitedCoarse` from `visitedMaskOut` (regions touched in the most recent phase)
+- widen the corridor by one Chebyshev ring around `visitedCoarse`
+- widening is cumulative (newly allowed regions stay allowed)
+- visited tracking is reset for the next phase by advancing the visited stamp
+
+This is the key performance win: we unlock *only where the search actually pushed*, not the entire ocean.
+
+### 7) Final guardrail
+
+If widening runs out of attempts and we still have no path:
+- run unrestricted fine BFS
+
+Correctness always comes from the fine solve. Coarse planning never “authorizes” a move by itself.
+
+## Defaults (and why they are not “0”)
+
+In `CoarseToFineWaterPath.ts` the defaults are intentionally non-zero:
+- `corridorRadius` defaults to `2`
+- `maxAttempts` defaults to `6`
+
+Reasoning:
+- The coarse map is often optimistic (a coarse cell becomes “water” if any child tile is water).
+  Thin peninsulas / narrow land bridges can disappear at 16x and cause the initial corridor to miss the real channel.
+- A slightly inflated initial corridor avoids immediate failure and reduces how often we hit the expensive final fallback.
+- Widening is cheap (coarse grid), but not free. `maxAttempts` caps worst-case behavior.
+
+## Related docs
+
+- `pathingReworkDocs/MultiSourceAnyTargetBFS.md`
+- `pathingReworkDocs/LocalCorridorWidening.md` (the widening rule)
+- `pathingReworkDocs/MaskExpanding.md` (no-restart refine)
