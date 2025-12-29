@@ -22,11 +22,11 @@ There are two kinds of signposts in this history:
 
 ### Doc checkpoints (read these first)
 
-- `docs/MultiSourceAnyTargetBFS.md` (BFS invariants) — `65ca00d5..69e422d3`
-- `docs/CoarseToFine.md` (corridor plan+refine) — `e08acdf0..368f5c59`
-- `docs/LocalCorridorWidening.md` (visited-driven widening) — `aa09240d`
-- `docs/MaskExpanding.md` (widen mask without restart) — `7bd7d35d`
-- `docs/lazytheta.md` (optional later) — `a6050794`
+- `pathingReworkDocs/MultiSourceAnyTargetBFS.md` (BFS invariants) - `65ca00d5..69e422d3`
+- `pathingReworkDocs/CoarseToFine.md` (corridor plan+refine) - `e08acdf0..368f5c59`
+- `pathingReworkDocs/LocalCorridorWidening.md` (visited-driven widening) - `aa09240d`
+- `pathingReworkDocs/MaskExpanding.md` (widen mask without restart) - `7bd7d35d`
+- `pathingReworkDocs/lazytheta.md` (optional later) - `a6050794`
 
 ### Branch bookmarks (major ideas)
 
@@ -42,15 +42,58 @@ There are two kinds of signposts in this history:
 
 Notes:
 - `aa09240d` is tagged `SpineAndPortals` in git history, but that commit is local corridor widening (no portal/spine abstraction yet).
-- A real “Spine & Portals” hierarchy (as described in `docs/SpineAndPortals.md`) likely comes **before** Lazy Theta* in practice.
+- A real "Spine & Portals" hierarchy (as described in `pathingReworkDocs/SpineAndPortals.md`) likely comes **before** Lazy Theta* in practice.
 
-### Rough phases (commit ranges)
+### Pathfinding branches (tree + commit ranges)
 
-- `65ca00d5..722c0235`: multi-source BFS + unit integration + water components
-- `e08acdf0..7bd7d35d`: coarse-to-fine corridor + widening + mask-expanding BFS
-- `f3edd553..b1f05aba`: tuning + microMap planning + rubber-band spine
-- `9e8ac07e`: post-processing (smoothing/offshore/spline; sibling branch)
-- `a6050794`: optional any-angle refine mode (Lazy Theta*)
+The pathing rework uses branches to mark *major ideas* (not every single step).
+This is the relationship between the important pathfinding branches and the commits that belong to them.
+
+```
+main (02a6ac58)
+└─ MultiSourceAnyTargetBFS (02a6ac58..69e422d3)
+   └─ CoarseToFine (69e422d3..368f5c59)
+      └─ BSPish (368f5c59..b1f05aba)
+         ├─ lazy-theta (b1f05aba..a6050794)          (optional later)
+         └─ pathPostprocessWaypointSpline (b1f05aba..9e8ac07e)
+```
+
+#### MultiSourceAnyTargetBFS (efficient boat routing algorithms)
+
+Range: `02a6ac58..69e422d3`
+- `65ca00d5` Multi-source / any-target BFS (baseline water routing)
+- `4564f9e4` Integrate into transport routing (seed origins → pick best spawn)
+- `9769cf25` Unify trade/warship routing on the same helpers
+- `722c0235` Water component ids (reject impossible searches)
+- `69e422d3` Docs checkpoint: `pathingReworkDocs/MultiSourceAnyTargetBFS.md`
+
+#### CoarseToFine (coarse-to-fine pathfinding for water navigation)
+
+Range: `69e422d3..368f5c59`
+- `e08acdf0` Coarse plan + corridor mask + refine
+- `27762942` Expose low-res maps (microMap plumbing)
+- `368f5c59` Docs checkpoint: `pathingReworkDocs/CoarseToFine.md`
+
+#### BSPish (rubber-band corridor + adaptive refinement)
+
+Range: `368f5c59..b1f05aba`
+- `aa09240d` Local corridor widening (visited-driven) + `pathingReworkDocs/LocalCorridorWidening.md`
+- `7bd7d35d` Mask-expanding BFS (no restart) + `pathingReworkDocs/MaskExpanding.md`
+- `f3edd553` Tune corridor defaults (avoid “optimistic coarse water” cliffs)
+- `26d215b8` Prefer `microMap` (16x) for coarse planning
+- `b1f05aba` Rubber-band coarse spine (tighten corridor)
+
+#### pathPostprocessWaypointSpline (path postprocessing: waypoints + spline output)
+
+Range: `b1f05aba..9e8ac07e`
+- `ae9a8cc8` Post-refine string pulling; expose sparse polyline (waypoints)
+- `89d638a0` Offshore waypoint snapping + robust LOS compression
+- `9e8ac07e` Offshore depth snap + spline output
+
+#### lazy-theta (Lazy Theta* water refinement)
+
+Range: `b1f05aba..a6050794`
+- `a6050794` Lazy Theta* refine mode (optional later) + `pathingReworkDocs/lazytheta.md`
 
 ---
 
@@ -222,5 +265,5 @@ For a boat route we typically do:
    - (next) sparse `waypoints`/spline for natural ship movement/rendering
 
 If you want the implementation details, see:
-- `docs/PathfindingEvolution_Core.md`
-- `docs/PathfindingEvolution_Scientific.md`
+- `pathingReworkDocs/PathfindingEvolution_Core.md`
+- `pathingReworkDocs/PathfindingEvolution_Scientific.md`

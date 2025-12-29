@@ -1,6 +1,6 @@
 # Water pathfinding evolution (from `main` → `lazy-theta`) — scientific / “paper” notes
 
-This document explains the *algorithmic* evolution of OpenFront’s water routing on the `lazy-theta` line, using a research-y framing: problem definition, graph model, method, and properties. For a narrative version, see `docs/PathfindingEvolution.md`. For code-level notes, see `docs/PathfindingEvolution_Core.md`.
+This document explains the *algorithmic* evolution of OpenFront’s water routing on the `lazy-theta` line, using a research-y framing: problem definition, graph model, method, and properties. For a narrative version, see `pathingReworkDocs/PathfindingEvolution.md`. For code-level notes, see `pathingReworkDocs/PathfindingEvolution_Core.md`.
 
 ---
 
@@ -17,11 +17,11 @@ Two kinds of signposts:
 - **Branch bookmarks**: branch names that mark major new ideas.
 
 Doc checkpoints:
-- `docs/MultiSourceAnyTargetBFS.md` - `65ca00d5..69e422d3`
-- `docs/CoarseToFine.md` - `e08acdf0..368f5c59`
-- `docs/LocalCorridorWidening.md` - `aa09240d`
-- `docs/MaskExpanding.md` - `7bd7d35d`
-- `docs/lazytheta.md` - `a6050794` (optional later)
+- `pathingReworkDocs/MultiSourceAnyTargetBFS.md` - `65ca00d5..69e422d3`
+- `pathingReworkDocs/CoarseToFine.md` - `e08acdf0..368f5c59`
+- `pathingReworkDocs/LocalCorridorWidening.md` - `aa09240d`
+- `pathingReworkDocs/MaskExpanding.md` - `7bd7d35d`
+- `pathingReworkDocs/lazytheta.md` - `a6050794` (optional later)
 
 Branch bookmarks (major ideas):
 
@@ -37,7 +37,26 @@ Branch bookmarks (major ideas):
 
 Notes:
 - `aa09240d` is tagged `SpineAndPortals` in git history, but that commit is local corridor widening (no portal/spine abstraction yet).
-- A real "Spine & Portals" hierarchy (see `docs/SpineAndPortals.md`) likely comes before Lazy Theta*.
+- A real "Spine & Portals" hierarchy (see `pathingReworkDocs/SpineAndPortals.md`) likely comes before Lazy Theta*.
+
+### Pathfinding branches + commits (repro)
+
+```
+main (02a6ac58)
+└─ MultiSourceAnyTargetBFS (02a6ac58..69e422d3)
+   └─ CoarseToFine (69e422d3..368f5c59)
+      └─ BSPish (368f5c59..b1f05aba)
+         ├─ lazy-theta (b1f05aba..a6050794)
+         └─ pathPostprocessWaypointSpline (b1f05aba..9e8ac07e)
+```
+
+Commit lists per branch:
+
+- `MultiSourceAnyTargetBFS` (`02a6ac58..69e422d3`): `65ca00d5`, `4564f9e4`, `9769cf25`, `722c0235`, `790600e9`, `69e422d3`
+- `CoarseToFine` (`69e422d3..368f5c59`): `e08acdf0`, `27762942`, `368f5c59`
+- `BSPish` (`368f5c59..b1f05aba`): `aa09240d`, `7bd7d35d`, `f3edd553`, `26d215b8`, `b1f05aba`
+- `pathPostprocessWaypointSpline` (`b1f05aba..9e8ac07e`): `ae9a8cc8`, `89d638a0`, `9e8ac07e`
+- `lazy-theta` (`b1f05aba..a6050794`): `a6050794`
 
 Linear commit sequence since the branch point:
 `65ca00d5 → 4564f9e4 → 9769cf25 → 722c0235 → 790600e9 → 69e422d3 → e08acdf0 → 27762942 → 368f5c59 → aa09240d → 7bd7d35d → f3edd553 → 26d215b8 → b1f05aba → a6050794`.
@@ -83,7 +102,7 @@ This branch evolves in a “correct first, then reduce search space, then reduce
 
 ### 3.1 Multi-source / any-target BFS (unweighted baseline)
 
-Implemented in `src/core/pathfinding/MultiSourceAnyTargetBFS.ts` (see `docs/MultiSourceAnyTargetBFS.md`).
+Implemented in `src/core/pathfinding/MultiSourceAnyTargetBFS.ts` (see `pathingReworkDocs/MultiSourceAnyTargetBFS.md`).
 
 Key property:
 - With uniform edge costs, BFS yields a shortest path in number of steps.
@@ -103,7 +122,7 @@ This reduces worst-case wasted searches (e.g., lakes vs ocean) to O(1) checks.
 
 ### 3.3 Coarse-to-fine corridor planning (search-space reduction)
 
-Implemented in `src/core/pathfinding/CoarseToFineWaterPath.ts` and `docs/CoarseToFine.md`.
+Implemented in `src/core/pathfinding/CoarseToFineWaterPath.ts` and `pathingReworkDocs/CoarseToFine.md`.
 
 Idea:
 - Plan on a downsampled map to obtain a coarse route (cheap).
@@ -145,7 +164,7 @@ Effect:
 
 ### 3.6 Lazy Theta* refinement (reduce node work; improve geometry)
 
-Implemented in `src/core/pathfinding/LazyThetaStar.ts` and described in `docs/lazytheta.md`.
+Implemented in `src/core/pathfinding/LazyThetaStar.ts` and described in `pathingReworkDocs/lazytheta.md`.
 
 Motivation:
 - Even inside a corridor, BFS explores *area*.

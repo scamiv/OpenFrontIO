@@ -5,8 +5,8 @@
 Goal: avoid “fine BFS floods the ocean” cases (e.g. thin river opens into huge water) by using coarse planning for global routing, and only doing fine-res search in local, bounded regions.
 
 This builds directly on:
-- `docs/CoarseToFine.md` (coarse corridor + safe fallback)
-- `docs/LocalCorridorWidening.md` (stamp-based masks + adaptive relaxation on failure)
+- `pathingReworkDocs/CoarseToFine.md` (coarse corridor + safe fallback)
+- `pathingReworkDocs/LocalCorridorWidening.md` (stamp-based masks + adaptive relaxation on failure)
 
 ## Concept
 

@@ -1,6 +1,6 @@
 # Water pathfinding evolution (from `main` → `lazy-theta`) — core developer notes
 
-This doc is the “how it actually works” companion to `docs/PathfindingEvolution.md`.
+This doc is the “how it actually works” companion to `pathingReworkDocs/PathfindingEvolution.md`.
 It’s organized as:
 
 1) Milestone tree / timeline by commit
@@ -16,11 +16,11 @@ Two kinds of signposts:
 - **Branch bookmarks**: branch names that mark major new ideas.
 
 Doc checkpoints:
-- `docs/MultiSourceAnyTargetBFS.md` — `65ca00d5..69e422d3`
-- `docs/CoarseToFine.md` — `e08acdf0..368f5c59`
-- `docs/LocalCorridorWidening.md` — `aa09240d`
-- `docs/MaskExpanding.md` — `7bd7d35d`
-- `docs/lazytheta.md` — `a6050794` (optional later)
+- `pathingReworkDocs/MultiSourceAnyTargetBFS.md` - `65ca00d5..69e422d3`
+- `pathingReworkDocs/CoarseToFine.md` - `e08acdf0..368f5c59`
+- `pathingReworkDocs/LocalCorridorWidening.md` - `aa09240d`
+- `pathingReworkDocs/MaskExpanding.md` - `7bd7d35d`
+- `pathingReworkDocs/lazytheta.md` - `a6050794` (optional later)
 
 Branch bookmarks (major ideas):
 
@@ -37,7 +37,48 @@ Branch bookmarks (major ideas):
 Notes:
 - Despite the branch name `SpineAndPortals` at `aa09240d`, that commit is **local corridor widening** (no portal/spine abstraction yet).
 - We keep **BFS as the default refine** until the corridor + postprocess pipeline is stable; Lazy Theta* stays an opt-in/late-stage knob.
-- A real “Spine & Portals” hierarchy (see `docs/SpineAndPortals.md`) likely comes before Lazy Theta*.
+- A real "Spine & Portals" hierarchy (see `pathingReworkDocs/SpineAndPortals.md`) likely comes before Lazy Theta*.
+
+### Pathfinding branches + commits (tree)
+
+```
+main (02a6ac58)
+└─ MultiSourceAnyTargetBFS (02a6ac58..69e422d3)
+   └─ CoarseToFine (69e422d3..368f5c59)
+      └─ BSPish (368f5c59..b1f05aba)
+         ├─ lazy-theta (b1f05aba..a6050794)
+         └─ pathPostprocessWaypointSpline (b1f05aba..9e8ac07e)
+```
+
+Branch commit lists (from `git log --reverse <base>..<branch>`):
+
+- `MultiSourceAnyTargetBFS` (`02a6ac58..69e422d3`)
+  - `65ca00d5` Implement MultiSourceAnyTargetBFS for efficient boat routing
+  - `4564f9e4` Refactor TransportShipExecution for improved pathfinding and routing
+  - `9769cf25` Trade/warship routing now uses shared boat helpers
+  - `722c0235` Add water component ID caching for improved pathfinding
+  - `790600e9` Instrumentation detour (temporary)
+  - `69e422d3` Docs checkpoint: `pathingReworkDocs/MultiSourceAnyTargetBFS.md`
+
+- `CoarseToFine` (`69e422d3..368f5c59`)
+  - `e08acdf0` Add coarse-to-fine pathfinding for water navigation
+  - `27762942` Enhance game map handling with microGameMap integration
+  - `368f5c59` Docs checkpoint: `pathingReworkDocs/CoarseToFine.md`
+
+- `BSPish` (`368f5c59..b1f05aba`)
+  - `aa09240d` Add local corridor widening for adaptive pathfinding + `pathingReworkDocs/LocalCorridorWidening.md`
+  - `7bd7d35d` Add mask-expanding for adaptive corridor refinement + `pathingReworkDocs/MaskExpanding.md`
+  - `f3edd553` Update corridor parameters in `CoarseToFineWaterPath` for robustness
+  - `26d215b8` Use microMap (16x) for boat coarse planning
+  - `b1f05aba` Add rubber band path optimization for coarse water pathfinding
+
+- `pathPostprocessWaypointSpline` (`b1f05aba..9e8ac07e`) (sibling branch)
+  - `ae9a8cc8` Post-refinement string pulling; expose sparse polyline for later spline-render
+  - `89d638a0` Path postprocess: offshore waypoint snapping + robust LOS compression
+  - `9e8ac07e` PathRubberBand: offshore depth-snap + spline output for boat routes
+
+- `lazy-theta` (`b1f05aba..a6050794`) (optional later)
+  - `a6050794` Add Lazy Theta* pathfinding for water refinement + `pathingReworkDocs/lazytheta.md`
 
 The linear commit sequence since `main` is:
 
@@ -50,7 +91,7 @@ The linear commit sequence since `main` is:
 ### `65ca00d5` — `MultiSourceAnyTargetBFS` introduced
 Files:
 - `src/core/pathfinding/MultiSourceAnyTargetBFS.ts`
-- `docs/MultiSourceAnyTargetBFS.md`
+- `pathingReworkDocs/MultiSourceAnyTargetBFS.md`
 
 Key ideas:
 - Multi-source BFS over water tiles with early exit on **target dequeue**.
@@ -107,7 +148,7 @@ Key idea:
 
 ### `69e422d3` — BFS docs cleanup (milestone)
 Files:
-- `docs/MultiSourceAnyTargetBFS.md`
+- `pathingReworkDocs/MultiSourceAnyTargetBFS.md`
 
 Key idea:
 - Document invariants (especially early exit correctness), and performance constraints.
@@ -115,7 +156,7 @@ Key idea:
 ### `e08acdf0` — coarse-to-fine corridor planning
 Files:
 - `src/core/pathfinding/CoarseToFineWaterPath.ts`
-- `docs/CoarseToFine.md`
+- `pathingReworkDocs/CoarseToFine.md`
 - `tests/core/pathfinding/CoarseToFineWaterPath.test.ts`
 
 Key ideas:
@@ -131,7 +172,7 @@ Key ideas:
 ### `27762942` — micro map integration
 Files:
 - `src/core/game/GameImpl.ts` (+ loader plumbing)
-- `docs/CoarseToFine.md`
+- `pathingReworkDocs/CoarseToFine.md`
 - `tests/util/Setup.ts`
 
 Key idea:
@@ -139,14 +180,14 @@ Key idea:
 
 ### `368f5c59` — coarse-to-fine docs checkpoint
 Files:
-- `docs/CoarseToFine.md`
+- `pathingReworkDocs/CoarseToFine.md`
 
 Key idea:
 - Clarify corridor/fallback semantics and expected failure modes of coarse abstraction.
 
 ### `aa09240d` — local corridor widening (visited-driven)
 Files:
-- `docs/LocalCorridorWidening.md`
+- `pathingReworkDocs/LocalCorridorWidening.md`
 - `src/core/pathfinding/CoarseToFineWaterPath.ts`
 - `src/core/pathfinding/MultiSourceAnyTargetBFS.ts`
 
@@ -159,7 +200,7 @@ Key ideas:
 
 ### `7bd7d35d` — mask-expanding BFS (resume instead of restart)
 Files:
-- `docs/MaskExpanding.md`
+- `pathingReworkDocs/MaskExpanding.md`
 - `src/core/pathfinding/MultiSourceAnyTargetBFS.ts`
 - `src/core/pathfinding/CoarseToFineWaterPath.ts`
 
@@ -204,7 +245,7 @@ Files:
 - `src/core/pathfinding/LazyThetaStar.ts`
 - `src/core/pathfinding/CoarseToFineWaterPath.ts`
 - `src/core/pathfinding/MultiSourceAnyTargetBFS.ts`
-- `docs/lazytheta.md`
+- `pathingReworkDocs/lazytheta.md`
 
 Key ideas:
 - Add `refineMode: "bfs" | "lazyTheta" | "auto"` to coarse-to-fine.

@@ -2,9 +2,9 @@
 
 Purpose: keep the “coarse corridor” win, but avoid repeated **restart + re-walk** churn when the corridor is too tight.
 
-This is the “performance-first” sibling of:
-- `docs/CoarseToFine.md` (coarse corridor + safe fallback)
-- `docs/LocalCorridorWidening.md` (visited-driven local relaxation)
+This is the "performance-first" sibling of:
+- `pathingReworkDocs/CoarseToFine.md` (coarse corridor + safe fallback)
+- `pathingReworkDocs/LocalCorridorWidening.md` (visited-driven local relaxation)
 
 Key idea: run one fine-res search; if the queue exhausts because the corridor is too restrictive, **expand the mask and keep going** without clearing the fine BFS state.
 
