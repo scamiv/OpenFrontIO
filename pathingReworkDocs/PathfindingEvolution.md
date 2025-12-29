@@ -1,4 +1,4 @@
-# Water pathfinding evolution (from `main` → `lazy-theta`) — general audience
+# Water pathfinding evolution — general audience
 
 This branch series is a case study in “how to do pathfinding right”:
 start with something correct and simple, then add *measured* optimizations and abstractions without breaking determinism.
