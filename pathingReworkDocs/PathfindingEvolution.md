@@ -31,8 +31,9 @@ There are two kinds of signposts in this history:
 ### Branch bookmarks (major ideas)
 
 ```
-* a6050794 (lazy-theta)      (optional later) Lazy Theta* refine mode
-| * 9e8ac07e (pathPostprocessWaypointSpline)  (sibling) post-process: smooth + offshore + spline/waypoints
+* 9e8ac07e (pathPostprocessWaypointSpline)  endgame: post-process + offshore + spline/waypoints (renderer pending)
+|\
+| * a6050794 (lazy-theta)    optional later: Lazy Theta* refine solver experiment
 |/
 * b1f05aba (BSPish)          Rubber-band coarse corridor spine
 * 368f5c59 (CoarseToFine)    Coarse-to-fine corridor planning
@@ -42,6 +43,7 @@ There are two kinds of signposts in this history:
 
 Notes:
 - `aa09240d` is tagged `SpineAndPortals` in git history, but that commit is local corridor widening (no portal/spine abstraction yet).
+- Roadmap: `pathPostprocessWaypointSpline` is the path-quality endgame (render integration pending); `lazy-theta` is optional once everything else is stable.
 - A real "Spine & Portals" hierarchy (as described in `pathingReworkDocs/SpineAndPortals.md`) likely comes **before** Lazy Theta* in practice.
 
 ### Pathfinding branches (tree + commit ranges)
@@ -54,8 +56,8 @@ main (02a6ac58)
 └─ MultiSourceAnyTargetBFS (02a6ac58..69e422d3)
    └─ CoarseToFine (69e422d3..368f5c59)
       └─ BSPish (368f5c59..b1f05aba)
-         ├─ lazy-theta (b1f05aba..a6050794)          (optional later)
-         └─ pathPostprocessWaypointSpline (b1f05aba..9e8ac07e)
+         ├─ pathPostprocessWaypointSpline (b1f05aba..9e8ac07e)  (endgame; renderer pending)
+         └─ lazy-theta (b1f05aba..a6050794)  (optional later)
 ```
 
 #### MultiSourceAnyTargetBFS (efficient boat routing algorithms)

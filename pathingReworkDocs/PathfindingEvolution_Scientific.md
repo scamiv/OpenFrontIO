@@ -1,6 +1,6 @@
-# Water pathfinding evolution (from `main` → `lazy-theta`) — scientific / “paper” notes
+# Water pathfinding evolution — scientific / “paper” notes
 
-This document explains the *algorithmic* evolution of OpenFront’s water routing on the `lazy-theta` line, using a research-y framing: problem definition, graph model, method, and properties. For a narrative version, see `pathingReworkDocs/PathfindingEvolution.md`. For code-level notes, see `pathingReworkDocs/PathfindingEvolution_Core.md`.
+This document explains the *algorithmic* evolution of OpenFront’s water routing on the pathing rework line, using a research-y framing: problem definition, graph model, method, and properties. For a narrative version, see `pathingReworkDocs/PathfindingEvolution.md`. For code-level notes, see `pathingReworkDocs/PathfindingEvolution_Core.md`.
 
 ---
 
@@ -26,8 +26,9 @@ Doc checkpoints:
 Branch bookmarks (major ideas):
 
 ```
-* a6050794 (lazy-theta)      (optional later) Lazy Theta* refine mode
-| * 9e8ac07e (pathPostprocessWaypointSpline)  (sibling) post-process: smooth + offshore + spline/waypoints
+* 9e8ac07e (pathPostprocessWaypointSpline)  endgame: post-process + offshore + spline/waypoints (renderer pending)
+|\
+| * a6050794 (lazy-theta)    optional later: Lazy Theta* refine solver experiment
 |/
 * b1f05aba (BSPish)          Rubber-band coarse corridor spine
 * 368f5c59 (CoarseToFine)    Coarse-to-fine corridor planning
@@ -37,6 +38,7 @@ Branch bookmarks (major ideas):
 
 Notes:
 - `aa09240d` is tagged `SpineAndPortals` in git history, but that commit is local corridor widening (no portal/spine abstraction yet).
+- Roadmap: `pathPostprocessWaypointSpline` is the path-quality endgame (render integration pending); `lazy-theta` is optional once everything else is stable.
 - A real "Spine & Portals" hierarchy (see `pathingReworkDocs/SpineAndPortals.md`) likely comes before Lazy Theta*.
 
 ### Pathfinding branches + commits (repro)
@@ -46,8 +48,8 @@ main (02a6ac58)
 └─ MultiSourceAnyTargetBFS (02a6ac58..69e422d3)
    └─ CoarseToFine (69e422d3..368f5c59)
       └─ BSPish (368f5c59..b1f05aba)
-         ├─ lazy-theta (b1f05aba..a6050794)
-         └─ pathPostprocessWaypointSpline (b1f05aba..9e8ac07e)
+         ├─ pathPostprocessWaypointSpline (b1f05aba..9e8ac07e)  (endgame; renderer pending)
+         └─ lazy-theta (b1f05aba..a6050794)  (optional later)
 ```
 
 Commit lists per branch:
