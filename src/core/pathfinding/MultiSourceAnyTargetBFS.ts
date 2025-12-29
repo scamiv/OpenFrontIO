@@ -3,6 +3,16 @@ import { GameMap, TileRef } from "../game/GameMap";
 export type MultiSourceAnyTargetBFSResult = {
   source: TileRef;
   target: TileRef;
+  /**
+   * Optional sparse waypoint chain (any-angle / postprocess output).
+   * When present, `path` typically corresponds to the tile-expanded `tiles`.
+   */
+  waypoints?: TileRef[];
+  /**
+   * Optional deterministic tile expansion of `waypoints` (e.g. Bresenham).
+   * When present, callers may treat this as the authoritative tile path.
+   */
+  tiles?: TileRef[];
   path: TileRef[];
 };
 

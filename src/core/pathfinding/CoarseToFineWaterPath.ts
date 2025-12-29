@@ -1,4 +1,5 @@
 import { GameMap, TileRef } from "../game/GameMap";
+import { LazyThetaStar } from "./LazyThetaStar";
 import {
   MultiSourceAnyTargetBFS,
   MultiSourceAnyTargetBFSOptions,
@@ -20,6 +21,13 @@ export type CoarseToFineWaterPathOptions = {
    * Multiply radius each attempt (e.g. 2 turns 2 -> 4 -> 8 ...).
    */
   radiusMultiplier?: number;
+  /**
+   * Refinement solver selection:
+   * - "bfs": current mask-expanding BFS
+   * - "lazyTheta": Lazy Theta* inside the corridor (widen-and-retry)
+   * - "auto": choose based on seed/target fanout
+   */
+  refineMode?: "bfs" | "lazyTheta" | "auto";
 };
 
 const bfsCache = new WeakMap<GameMap, MultiSourceAnyTargetBFS>();
@@ -29,6 +37,15 @@ function getBfs(gm: GameMap): MultiSourceAnyTargetBFS {
   const bfs = new MultiSourceAnyTargetBFS(gm.width() * gm.height());
   bfsCache.set(gm, bfs);
   return bfs;
+}
+
+const thetaCache = new WeakMap<GameMap, LazyThetaStar>();
+function getTheta(gm: GameMap): LazyThetaStar {
+  const cached = thetaCache.get(gm);
+  if (cached) return cached;
+  const theta = new LazyThetaStar(gm.width() * gm.height());
+  thetaCache.set(gm, theta);
+  return theta;
 }
 
 type FineToCoarseMapping = {
@@ -181,6 +198,15 @@ function widenAllowedByVisitedRing(
   return count;
 }
 
+const newlyAllowedCache = new WeakMap<GameMap, Int32Array>();
+function getNewlyAllowedScratch(coarse: GameMap): Int32Array {
+  const cached = newlyAllowedCache.get(coarse);
+  if (cached) return cached;
+  const scratch = new Int32Array(coarse.width() * coarse.height());
+  newlyAllowedCache.set(coarse, scratch);
+  return scratch;
+}
+
 export function findWaterPathFromSeedsCoarseToFine(
   fineMap: GameMap,
   seedNodes: readonly TileRef[],
@@ -292,7 +318,68 @@ export function findWaterPathFromSeedsCoarseToFine(
     corridorRadius0,
   );
 
+  const refineMode = coarseToFine.refineMode ?? "auto";
+  const wantTheta =
+    refineMode === "lazyTheta" ||
+    (refineMode === "auto" && seedNodes.length <= 16 && targets.length <= 16);
+
   const visitedSet = getVisitedStampSet(coarseMap);
+
+  const allowedMask = {
+    tileToRegion: mapping.fineToCoarse,
+    regionStamp: allowedSet.data,
+    stamp: allowed,
+  };
+
+  if (wantTheta) {
+    const theta = getTheta(fineMap);
+    const outNewlyAllowed = getNewlyAllowedScratch(coarseMap);
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const visitedMask = {
+        tileToRegion: mapping.fineToCoarse,
+        regionStamp: visitedSet.data,
+        stamp: nextStamp(visitedSet),
+      };
+
+      const refined = theta.findWaterPathFromSeeds(
+        fineMap,
+        seedNodes,
+        seedOrigins,
+        targets,
+        { ...bfsOpts, allowedMask, visitedMaskOut: visitedMask },
+      );
+      if (refined !== null) return refined;
+
+      if (attempt >= maxAttempts - 1) break;
+
+      // Expand by 1 ring around the coarse regions actually visited in the attempt.
+      // Widening is cumulative (newly allowed regions stay allowed).
+      const newCount = widenAllowedByVisitedRing(
+        coarseWidth,
+        coarseHeight,
+        allowedSet.data,
+        allowed,
+        visitedSet.data,
+        visitedMask.stamp,
+        outNewlyAllowed,
+      );
+      if (newCount <= 0) break;
+    }
+
+    // Auto-mode guardrail: if Theta* didn't resolve it inside the corridor, fall back to the
+    // existing mask-expanding BFS (often better in very constrained corridors).
+    if (refineMode !== "auto") {
+      return fineBfs.findWaterPathFromSeeds(
+        fineMap,
+        seedNodes,
+        seedOrigins,
+        targets,
+        bfsOpts,
+      );
+    }
+  }
+
   let expansionsLeft = maxAttempts - 1;
   const visitedMask = {
     tileToRegion: mapping.fineToCoarse,
@@ -305,15 +392,7 @@ export function findWaterPathFromSeedsCoarseToFine(
     seedNodes,
     seedOrigins,
     targets,
-    {
-      ...bfsOpts,
-      allowedMask: {
-        tileToRegion: mapping.fineToCoarse,
-        regionStamp: allowedSet.data,
-        stamp: allowed,
-      },
-      visitedMaskOut: visitedMask,
-    },
+    { ...bfsOpts, allowedMask, visitedMaskOut: visitedMask },
     (outNewlyAllowed) => {
       if (expansionsLeft <= 0) return 0;
 
