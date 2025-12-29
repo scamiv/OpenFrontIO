@@ -20,6 +20,7 @@ Doc checkpoints:
 - `pathingReworkDocs/CoarseToFine.md` - `e08acdf0..368f5c59`
 - `pathingReworkDocs/LocalCorridorWidening.md` - `aa09240d`
 - `pathingReworkDocs/MaskExpanding.md` - `7bd7d35d`
+- `pathingReworkDocs/PathPostprocessWaypointSpline.md` - `b1f05aba..9e8ac07e` (endgame; renderer pending)
 - `pathingReworkDocs/lazytheta.md` - `a6050794` (optional later)
 
 Branch bookmarks (major ideas):
@@ -318,3 +319,4 @@ Existing tests worth keeping up to date:
 
 When integrating postprocessing (`pathPostprocessWaypointSpline`):
 - prefer consuming `result.waypoints` / `result.tiles` without changing the pathfinding core again
+- implementation details: `pathingReworkDocs/PathPostprocessWaypointSpline.md`

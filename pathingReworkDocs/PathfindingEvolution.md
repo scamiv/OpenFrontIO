@@ -9,7 +9,7 @@ If you don’t care about implementation details, the headline is:
 2) **Don’t search the impossible:** precompute connected water bodies and reject routes that can’t exist.
 3) **Don’t flood the whole ocean:** plan on a low-res map, then refine only inside a corridor.
 4) **Relax locally, not globally:** when the corridor is wrong, widen where the search actually tried, not everywhere.
-5) **Make ships look like ships:** post-process the final tile path into sparse waypoints/splines and push it offshore.
+5) **Make ships look like ships:** post-process the final tile path into sparse waypoints/spline samples and push it offshore (renderer integration pending).
 6) **(Optional later) Any-angle refinement:** Lazy Theta* can reduce expansions and improve geometry once the pipeline is solid.
 
 ---
@@ -26,6 +26,7 @@ There are two kinds of signposts in this history:
 - `pathingReworkDocs/CoarseToFine.md` (corridor plan+refine) - `e08acdf0..368f5c59`
 - `pathingReworkDocs/LocalCorridorWidening.md` (visited-driven widening) - `aa09240d`
 - `pathingReworkDocs/MaskExpanding.md` (widen mask without restart) - `7bd7d35d`
+- `pathingReworkDocs/PathPostprocessWaypointSpline.md` (endgame: post-process + offshore + spline samples) - `b1f05aba..9e8ac07e`
 - `pathingReworkDocs/lazytheta.md` (optional later) - `a6050794`
 
 ### Branch bookmarks (major ideas)
@@ -235,6 +236,8 @@ Why it's right:
 - Pure post-pass: doesn't change reachability or correctness, only the produced geometry.
 - Complements everything else (corridors, mask expansion, future hierarchy).
 
+Details: `pathingReworkDocs/PathPostprocessWaypointSpline.md`.
+
 ### 11) `a6050794` - (Optional later) Lazy Theta* refinement mode
 
 Problem:
@@ -262,10 +265,15 @@ For a boat route we typically do:
    - coarse plan → corridor mask
    - refine inside corridor (BFS today; Lazy Theta* is an optional later knob)
    - if corridor fails, locally widen; only then consider full fallback
-4) Output:
-   - `path`/tiles for deterministic simulation
-   - (next) sparse `waypoints`/spline for natural ship movement/rendering
+4) Post-process:
+   - LOS-compress the tile path into sparse `waypoints`
+   - optionally “push offshore” using a depth / distance-to-land signal
+   - optionally generate `spline` samples for rendering (tile path remains authoritative)
+5) Output:
+   - `path` (tile-valid) for deterministic simulation and debugging
+   - `waypoints` (+ optional `spline`) for natural ship movement/rendering once the renderer consumes them
 
 If you want the implementation details, see:
 - `pathingReworkDocs/PathfindingEvolution_Core.md`
 - `pathingReworkDocs/PathfindingEvolution_Scientific.md`
+- `pathingReworkDocs/PathPostprocessWaypointSpline.md`
