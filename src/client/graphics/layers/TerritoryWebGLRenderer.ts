@@ -42,11 +42,12 @@ export class TerritoryWebGLRenderer {
   private needsStateUpload = true;
   private paletteWidth = 1;
 
-  // Render uniform layout (48 bytes):
+  // Render uniform layout (64 bytes):
   //   [0..3] mapResolution_viewScale_time (x=mapW, y=mapH, z=viewScale, w=timeSec)
   //   [4..7] viewOffset_alt_highlight (x=offX, y=offY, z=alternativeView, w=highlightOwnerId)
   //   [8..11] viewSize_pad (x=viewW, y=viewH)
-  private readonly uniformData = new Float32Array(12);
+  //   [12..14] falloutColor (x=r, y=g, z=b, w unused)
+  private readonly uniformData = new Float32Array(16);
 
   // Defense params (16 bytes, u32): range, postCount, epoch, padding.
   private readonly defenseParamsData = new Uint32Array(4);
@@ -194,9 +195,9 @@ export class TerritoryWebGLRenderer {
     const TEXTURE_BINDING = GPUTextureUsage?.TEXTURE_BINDING ?? 0x4;
     const STORAGE_BINDING = GPUTextureUsage?.STORAGE_BINDING ?? 0x8;
 
-    // Render uniforms: 3x vec4f = 48 bytes
+    // Render uniforms: 4x vec4f = 64 bytes
     this.uniformBuffer = this.device.createBuffer({
-      size: 48,
+      size: 64,
       usage: UNIFORM | COPY_DST_BUF,
     });
 
@@ -241,6 +242,7 @@ export class TerritoryWebGLRenderer {
 	  mapResolution_viewScale_time: vec4f, // x=mapW, y=mapH, z=viewScale, w=timeSec
 	  viewOffset_alt_highlight: vec4f,     // x=offX, y=offY, z=alternativeView, w=highlightOwnerId
 	  viewSize_pad: vec4f,                // x=viewW, y=viewH, z/w unused
+	  falloutColor: vec4f,                // x=r, y=g, z=b, w unused
 	};
 
 	struct DefenseParams {
@@ -292,6 +294,7 @@ fn fsMain(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let texCoord = vec2i(mapCoord);
   let state = textureLoad(stateTex, texCoord, 0).x;
   let owner = state & 0xFFFu;
+  let hasFallout = (state & 0x2000u) != 0u;
 
 	  let terrain = textureLoad(terrainTex, texCoord, 0);
 	  var outColor = terrain;
@@ -302,7 +305,12 @@ fn fsMain(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 	    if (defended) {
 	      territoryRgb = mix(territoryRgb, vec3f(1.0, 0.0, 1.0), 0.35);
 	    }
+	    if (hasFallout) {
+	      territoryRgb = mix(territoryRgb, u.falloutColor.rgb, 0.5);
+	    }
 	    outColor = vec4f(mix(terrain.rgb, territoryRgb, 0.65), 1.0);
+	  } else if (hasFallout) {
+	    outColor = vec4f(mix(terrain.rgb, u.falloutColor.rgb, 0.5), 1.0);
 	  }
 
   // Apply alternative view (hide territory by showing terrain only)
@@ -993,6 +1001,12 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
     this.uniformData[9] = this.viewHeight;
     this.uniformData[10] = 0;
     this.uniformData[11] = 0;
+
+    // Hardcoded fallout color: rgb(120,255,71)
+    this.uniformData[12] = 120 / 255;
+    this.uniformData[13] = 255 / 255;
+    this.uniformData[14] = 71 / 255;
+    this.uniformData[15] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
   }

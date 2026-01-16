@@ -153,7 +153,6 @@ export class TerritoryLayer implements Layer {
       canvas.style.width = "100%";
       canvas.style.height = "100%";
       canvas.style.display = "block";
-      canvas.style.zIndex = "9999";
     }
 
     const parent = mainCanvas.parentElement;
@@ -194,12 +193,12 @@ export class TerritoryLayer implements Layer {
       this.syncOverlayWrapperSize(mainCanvas, wrapper);
     }
 
-    // Ensure overlay canvas is the last child so it paints on top.
+    // Ensure territory canvas is the first child so it's the lowest layer.
     if (canvas.parentElement !== wrapper) {
       canvas.remove();
-      wrapper.appendChild(canvas);
-    } else if (canvas !== wrapper.lastElementChild) {
-      wrapper.appendChild(canvas);
+      wrapper.insertBefore(canvas, mainCanvas);
+    } else if (canvas !== wrapper.firstElementChild) {
+      wrapper.insertBefore(canvas, mainCanvas);
     }
   }
 
