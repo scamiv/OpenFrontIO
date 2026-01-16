@@ -7,8 +7,8 @@ import { UserSettings } from "../../../core/game/UserSettings";
 import { AlternateViewEvent, MouseOverEvent } from "../../InputHandler";
 import { FrameProfiler } from "../FrameProfiler";
 import { TransformHandler } from "../TransformHandler";
+import { TerritoryRenderer } from "../webgpu/TerritoryRenderer";
 import { Layer } from "./Layer";
-import { TerritoryWebGLRenderer } from "./TerritoryWebGLRenderer";
 
 export class TerritoryLayer implements Layer {
   profileName(): string {
@@ -22,7 +22,7 @@ export class TerritoryLayer implements Layer {
 
   private theme: Theme;
 
-  private territoryRenderer: TerritoryWebGLRenderer | null = null;
+  private territoryRenderer: TerritoryRenderer | null = null;
   private alternativeView = false;
 
   private lastPaletteSignature: string | null = null;
@@ -86,7 +86,7 @@ export class TerritoryLayer implements Layer {
   }
 
   private configureRenderer() {
-    const { renderer, reason } = TerritoryWebGLRenderer.create(
+    const { renderer, reason } = TerritoryRenderer.create(
       this.game,
       this.theme,
     );
