@@ -16,6 +16,9 @@ function align(value: number, alignment: number): number {
 // Minimal territory renderer backed by WebGPU.
 // Note: Name kept to minimize diff against the previous WebGL implementation.
 export class TerritoryWebGLRenderer {
+  private static readonly PALETTE_RESERVED_SLOTS = 10;
+  private static readonly PALETTE_FALLOUT_INDEX = 0;
+
   public readonly canvas: HTMLCanvasElement;
 
   private readonly mapWidth: number;
@@ -42,12 +45,11 @@ export class TerritoryWebGLRenderer {
   private needsStateUpload = true;
   private paletteWidth = 1;
 
-  // Render uniform layout (64 bytes):
+  // Render uniform layout (48 bytes):
   //   [0..3] mapResolution_viewScale_time (x=mapW, y=mapH, z=viewScale, w=timeSec)
   //   [4..7] viewOffset_alt_highlight (x=offX, y=offY, z=alternativeView, w=highlightOwnerId)
   //   [8..11] viewSize_pad (x=viewW, y=viewH)
-  //   [12..14] falloutColor (x=r, y=g, z=b, w unused)
-  private readonly uniformData = new Float32Array(16);
+  private readonly uniformData = new Float32Array(12);
 
   // Defense params (16 bytes, u32): range, postCount, epoch, padding.
   private readonly defenseParamsData = new Uint32Array(4);
@@ -195,9 +197,9 @@ export class TerritoryWebGLRenderer {
     const TEXTURE_BINDING = GPUTextureUsage?.TEXTURE_BINDING ?? 0x4;
     const STORAGE_BINDING = GPUTextureUsage?.STORAGE_BINDING ?? 0x8;
 
-    // Render uniforms: 4x vec4f = 64 bytes
+    // Render uniforms: 3x vec4f = 48 bytes
     this.uniformBuffer = this.device.createBuffer({
-      size: 64,
+      size: 48,
       usage: UNIFORM | COPY_DST_BUF,
     });
 
@@ -242,7 +244,6 @@ export class TerritoryWebGLRenderer {
 	  mapResolution_viewScale_time: vec4f, // x=mapW, y=mapH, z=viewScale, w=timeSec
 	  viewOffset_alt_highlight: vec4f,     // x=offX, y=offY, z=alternativeView, w=highlightOwnerId
 	  viewSize_pad: vec4f,                // x=viewW, y=viewH, z/w unused
-	  falloutColor: vec4f,                // x=r, y=g, z=b, w unused
 	};
 
 	struct DefenseParams {
@@ -299,18 +300,23 @@ fn fsMain(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 	  let terrain = textureLoad(terrainTex, texCoord, 0);
 	  var outColor = terrain;
 	  if (owner != 0u) {
-	    let c = textureLoad(paletteTex, vec2i(i32(owner), 0), 0);
+	    // Player colors start at index 10
+	    let c = textureLoad(paletteTex, vec2i(i32(owner) + 10, 0), 0);
 	    let defended = textureLoad(defendedTex, texCoord, 0).x == d.epoch;
 	    var territoryRgb = c.rgb;
 	    if (defended) {
 	      territoryRgb = mix(territoryRgb, vec3f(1.0, 0.0, 1.0), 0.35);
 	    }
 	    if (hasFallout) {
-	      territoryRgb = mix(territoryRgb, u.falloutColor.rgb, 0.5);
+	      // Fallout color is at index 0
+	      let falloutColor = textureLoad(paletteTex, vec2i(0, 0), 0).rgb;
+	      territoryRgb = mix(territoryRgb, falloutColor, 0.5);
 	    }
 	    outColor = vec4f(mix(terrain.rgb, territoryRgb, 0.65), 1.0);
 	  } else if (hasFallout) {
-	    outColor = vec4f(mix(terrain.rgb, u.falloutColor.rgb, 0.5), 1.0);
+	    // Fallout color is at index 0
+	    let falloutColor = textureLoad(paletteTex, vec2i(0, 0), 0).rgb;
+	    outColor = vec4f(mix(terrain.rgb, falloutColor, 0.5), 1.0);
 	  }
 
   // Apply alternative view (hide territory by showing terrain only)
@@ -904,7 +910,10 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
     for (const player of this.game.playerViews()) {
       maxSmallId = Math.max(maxSmallId, player.smallID());
     }
-    const nextPaletteWidth = Math.max(1, maxSmallId + 1);
+    // Reserve first 10 slots for special colors, then player colors start at index 10
+    const nextPaletteWidth =
+      TerritoryWebGLRenderer.PALETTE_RESERVED_SLOTS +
+      Math.max(1, maxSmallId + 1);
 
     if (nextPaletteWidth !== this.paletteWidth) {
       this.paletteWidth = nextPaletteWidth;
@@ -921,12 +930,22 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
     }
 
     const bytes = new Uint8Array(this.paletteWidth * 4);
-    // ownerId 0 stays transparent.
+
+    // Store special colors in reserved slots (0-9)
+    // Index 0: Fallout color (hardcoded for now)
+    const falloutIdx = TerritoryWebGLRenderer.PALETTE_FALLOUT_INDEX * 4;
+    bytes[falloutIdx] = 120;
+    bytes[falloutIdx + 1] = 255;
+    bytes[falloutIdx + 2] = 71;
+    bytes[falloutIdx + 3] = 255;
+    // Indices 1-9 reserved for future use
+
+    // Store player colors starting at index 10
     for (const player of this.game.playerViews()) {
       const id = player.smallID();
-      if (id <= 0 || id >= this.paletteWidth) continue;
+      if (id <= 0) continue;
       const rgba = player.territoryColor().rgba;
-      const idx = id * 4;
+      const idx = (TerritoryWebGLRenderer.PALETTE_RESERVED_SLOTS + id) * 4;
       bytes[idx] = rgba.r;
       bytes[idx + 1] = rgba.g;
       bytes[idx + 2] = rgba.b;
@@ -1001,12 +1020,6 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
     this.uniformData[9] = this.viewHeight;
     this.uniformData[10] = 0;
     this.uniformData[11] = 0;
-
-    // Hardcoded fallout color: rgb(120,255,71)
-    this.uniformData[12] = 120 / 255;
-    this.uniformData[13] = 255 / 255;
-    this.uniformData[14] = 71 / 255;
-    this.uniformData[15] = 0;
 
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
   }
