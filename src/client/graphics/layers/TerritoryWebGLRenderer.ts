@@ -34,7 +34,8 @@ export class TerritoryWebGLRenderer {
   private readonly state: Uint16Array;
   // Track tiles that need to be updated on the GPU. Use a Set to avoid duplicates.
   private readonly pendingTiles: Set<number> = new Set();
-  private needsFullRebuild = true;
+  // Forces a defended rebuild even if no tiles changed.
+  private needsDefendedRebuild = true;
   private needsPaletteUpload = true;
   // When using a GPU-authoritative state, the CPU does not upload state
   // textures after initialization. Keep this flag for initial upload only.
@@ -42,19 +43,19 @@ export class TerritoryWebGLRenderer {
   private paletteWidth = 1;
 
   // Render uniform layout (48 bytes):
-  //   [0..3] mapResolution_viewScale
-  //   [4..7] viewOffset
-  //   [8..11] defenseParams (x=defensePostRange, y=defensePostsCount)
+  //   [0..3] mapResolution_viewScale_time (x=mapW, y=mapH, z=viewScale, w=timeSec)
+  //   [4..7] viewOffset_alt_highlight (x=offX, y=offY, z=alternativeView, w=highlightOwnerId)
+  //   [8..11] viewSize_pad (x=viewW, y=viewH)
   private readonly uniformData = new Float32Array(12);
 
-  // Compute uniform layout (16 bytes):
-  //   [0..3] defenseParams (x=defensePostRange, y=defensePostsCount, z/w unused)
-  private readonly computeUniformData = new Float32Array(4);
+  // Defense params (16 bytes, u32): range, postCount, epoch, padding.
+  private readonly defenseParamsData = new Uint32Array(4);
+  private defenseParamsBuffer: any | null = null;
+  private defendedEpoch = 1;
+  private needsDefendedHardClear = true;
+  private lastDefenseRange = -1;
+  private lastDefensePostsCount = -1;
 
-  private readonly computeParams = new Uint32Array(4);
-
-  private stateBuffer: any | null = null;
-  private computeParamsBuffer: any | null = null;
   private updatesBuffer: any | null = null;
   private updatesCapacity = 0;
   private updatesStaging: Uint32Array | null = null;
@@ -70,7 +71,7 @@ export class TerritoryWebGLRenderer {
   // Bind group layout and bind group for scatter (state update) compute pass
   private computeBindGroupLayoutScatter: any | null = null;
   private scatterBindGroup: any | null = null;
-  // Compute pipelines for scatter/state update
+  // Compute pipeline for scatter/state update
   private computePipelineScatterState: any | null = null;
 
   // Clear defended texture pass
@@ -91,8 +92,7 @@ export class TerritoryWebGLRenderer {
   private pipeline: any | null = null;
   private bindGroupLayout: any | null = null;
   private bindGroup: any | null = null;
-  private uniformBuffer: any | null = null; // For render shader (48 bytes)
-  private computeUniformBuffer: any | null = null; // For compute shader (16 bytes, only defenseParams)
+  private uniformBuffer: any | null = null;
   private stateTexture: any | null = null;
   private terrainTexture: any | null = null;
   private paletteTexture: any | null = null;
@@ -194,14 +194,14 @@ export class TerritoryWebGLRenderer {
     const TEXTURE_BINDING = GPUTextureUsage?.TEXTURE_BINDING ?? 0x4;
     const STORAGE_BINDING = GPUTextureUsage?.STORAGE_BINDING ?? 0x8;
 
-    // Render uniform buffer: 3x vec4f = 48 bytes
+    // Render uniforms: 3x vec4f = 48 bytes
     this.uniformBuffer = this.device.createBuffer({
       size: 48,
       usage: UNIFORM | COPY_DST_BUF,
     });
 
-    // Compute uniform buffer: 1x vec4f = 16 bytes (only defenseParams)
-    this.computeUniformBuffer = this.device.createBuffer({
+    // Defense params: 4x u32 = 16 bytes (range, postCount, epoch, padding)
+    this.defenseParamsBuffer = this.device.createBuffer({
       size: 16,
       usage: UNIFORM | COPY_DST_BUF,
     });
@@ -215,7 +215,7 @@ export class TerritoryWebGLRenderer {
       usage: COPY_DST_TEX | TEXTURE_BINDING | STORAGE_BINDING,
     });
 
-    // Defended tiles texture (uint 0/1). Using r32uint for broad WebGPU support.
+    // Defended tiles texture (u32 stamps). Using r32uint for broad WebGPU support.
     this.defendedTex = this.device.createTexture({
       size: { width: this.mapWidth, height: this.mapHeight },
       format: "r32uint",
@@ -237,17 +237,25 @@ export class TerritoryWebGLRenderer {
 
     const shader = this.device.createShaderModule({
       code: `
-struct Uniforms {
-  mapResolution_viewScale: vec4f, // x=mapW, y=mapH, z=viewScale, w=timeSec
-  viewOffset: vec4f,              // x=offX, y=offY, z=alternativeView, w=highlightOwnerId
-  defenseParams: vec4f,           // x=defensePostRange, y=defensePostsCount, z/w unused
-};
+	struct Uniforms {
+	  mapResolution_viewScale_time: vec4f, // x=mapW, y=mapH, z=viewScale, w=timeSec
+	  viewOffset_alt_highlight: vec4f,     // x=offX, y=offY, z=alternativeView, w=highlightOwnerId
+	  viewSize_pad: vec4f,                // x=viewW, y=viewH, z/w unused
+	};
 
-@group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var stateTex: texture_2d<u32>;
-@group(0) @binding(2) var defendedTex: texture_2d<u32>;
-@group(0) @binding(3) var paletteTex: texture_2d<f32>;
-@group(0) @binding(4) var terrainTex: texture_2d<f32>;
+	struct DefenseParams {
+	  range: u32,
+	  postCount: u32,
+	  epoch: u32,
+	  _pad: u32,
+	};
+
+	@group(0) @binding(0) var<uniform> u: Uniforms;
+	@group(0) @binding(1) var<uniform> d: DefenseParams;
+	@group(0) @binding(2) var stateTex: texture_2d<u32>;
+	@group(0) @binding(3) var defendedTex: texture_2d<u32>;
+	@group(0) @binding(4) var paletteTex: texture_2d<f32>;
+	@group(0) @binding(5) var terrainTex: texture_2d<f32>;
 
 @vertex
 fn vsMain(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
@@ -260,35 +268,22 @@ fn vsMain(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
   return vec4f(p, 0.0, 1.0);
 }
 
-fn composeBaseColor(texCoord: vec2i, owner: u32) -> vec4f {
-  let terrain = textureLoad(terrainTex, texCoord, 0);
-  if (owner == 0u) {
-    return terrain;
-  }
-
-  let c = textureLoad(paletteTex, vec2i(i32(owner), 0), 0);
-  let defended = textureLoad(defendedTex, texCoord, 0).x != 0u;
-  var territoryRgb = c.rgb;
-  if (defended) {
-    territoryRgb = mix(territoryRgb, vec3f(1.0, 0.0, 1.0), 0.35);
-  }
-
-  return vec4f(mix(terrain.rgb, territoryRgb, 0.65), 1.0);
-}
-
 @fragment
 fn fsMain(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-  let mapRes = u.mapResolution_viewScale.xy;
-  let viewScale = u.mapResolution_viewScale.z;
-  let timeSec = u.mapResolution_viewScale.w;
-  let viewOffset = u.viewOffset.xy;
-  let altView = u.viewOffset.z;
-  let highlightId = u.viewOffset.w;
+	  let mapRes = u.mapResolution_viewScale_time.xy;
+	  let viewScale = u.mapResolution_viewScale_time.z;
+	  let timeSec = u.mapResolution_viewScale_time.w;
+	  let viewOffset = u.viewOffset_alt_highlight.xy;
+	  let altView = u.viewOffset_alt_highlight.z;
+	  let highlightId = u.viewOffset_alt_highlight.w;
+	  let viewSize = u.viewSize_pad.xy;
 
   // WebGPU fragment position is top-left origin and at pixel centers (0.5, 1.5, ...).
-  let viewCoord = vec2f(pos.x - 0.5, pos.y - 0.5);
-  let mapHalf = mapRes * 0.5;
-  let mapCoord = (viewCoord - mapHalf) / viewScale + viewOffset + mapHalf;
+	  let viewCoord = vec2f(pos.x - 0.5, pos.y - 0.5);
+	  let mapHalf = mapRes * 0.5;
+	  // Match TransformHandler.screenToWorldCoordinates formula:
+	  // gameX = (canvasX - game.width() / 2) / scale + offsetX + game.width() / 2
+	  let mapCoord = (viewCoord - mapHalf) / viewScale + viewOffset + mapHalf;
 
   if (mapCoord.x < 0.0 || mapCoord.y < 0.0 || mapCoord.x >= mapRes.x || mapCoord.y >= mapRes.y) {
     discard;
@@ -298,12 +293,22 @@ fn fsMain(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let state = textureLoad(stateTex, texCoord, 0).x;
   let owner = state & 0xFFFu;
 
-  var outColor = composeBaseColor(texCoord, owner);
+	  let terrain = textureLoad(terrainTex, texCoord, 0);
+	  var outColor = terrain;
+	  if (owner != 0u) {
+	    let c = textureLoad(paletteTex, vec2i(i32(owner), 0), 0);
+	    let defended = textureLoad(defendedTex, texCoord, 0).x == d.epoch;
+	    var territoryRgb = c.rgb;
+	    if (defended) {
+	      territoryRgb = mix(territoryRgb, vec3f(1.0, 0.0, 1.0), 0.35);
+	    }
+	    outColor = vec4f(mix(terrain.rgb, territoryRgb, 0.65), 1.0);
+	  }
 
   // Apply alternative view (hide territory by showing terrain only)
-  if (altView > 0.5 && owner != 0u) {
-    outColor = textureLoad(terrainTex, texCoord, 0);
-  }
+	  if (altView > 0.5 && owner != 0u) {
+	    outColor = terrain;
+	  }
 
   // Apply hover highlight if needed
   if (highlightId > 0.5) {
@@ -321,6 +326,7 @@ fn fsMain(@builtin(position) pos: vec4f) -> @location(0) vec4f {
 }
 `,
     });
+
     this.bindGroupLayout = this.device.createBindGroupLayout({
       entries: [
         {
@@ -331,7 +337,7 @@ fn fsMain(@builtin(position) pos: vec4f) -> @location(0) vec4f {
         {
           binding: 1,
           visibility: 2 /* FRAGMENT */,
-          texture: { sampleType: "uint" },
+          buffer: { type: "uniform" },
         },
         {
           binding: 2,
@@ -341,10 +347,15 @@ fn fsMain(@builtin(position) pos: vec4f) -> @location(0) vec4f {
         {
           binding: 3,
           visibility: 2 /* FRAGMENT */,
-          texture: { sampleType: "float" },
+          texture: { sampleType: "uint" },
         },
         {
           binding: 4,
+          visibility: 2 /* FRAGMENT */,
+          texture: { sampleType: "float" },
+        },
+        {
+          binding: 5,
           visibility: 2 /* FRAGMENT */,
           texture: { sampleType: "float" },
         },
@@ -417,9 +428,12 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
     // Compute pass 3: Update defended texture from defense posts.
     const computeShaderUpdateDefended = this.device.createShaderModule({
       code: `
-struct ComputeUniforms {
-  defenseParams: vec4f, // x=range, y=postCount, z/w unused
-};
+	struct DefenseParams {
+	  range: u32,
+	  postCount: u32,
+	  epoch: u32,
+	  _pad: u32,
+	};
 
 struct DefensePost {
   x: u32,
@@ -427,7 +441,7 @@ struct DefensePost {
   ownerId: u32,
 };
 
-@group(0) @binding(0) var<uniform> u: ComputeUniforms;
+	@group(0) @binding(0) var<uniform> d: DefenseParams;
 @group(0) @binding(1) var<storage, read> posts: array<DefensePost>;
 @group(0) @binding(2) var stateTex: texture_2d<u32>;
 @group(0) @binding(3) var defendedTex: texture_storage_2d<r32uint, write>;
@@ -435,12 +449,12 @@ struct DefensePost {
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
   let postIdx = globalId.z;
-  let postCount = u32(u.defenseParams.y);
+	  let postCount = d.postCount;
   if (postIdx >= postCount) {
     return;
   }
 
-  let range = i32(u.defenseParams.x);
+	  let range = i32(d.range);
   if (range < 0) {
     return;
   }
@@ -464,7 +478,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
   let state = textureLoad(stateTex, texCoord, 0).x;
   let owner = state & 0xFFFu;
   if (owner == post.ownerId) {
-    textureStore(defendedTex, texCoord, vec4u(1u, 0u, 0u, 0u));
+	    textureStore(defendedTex, texCoord, vec4u(d.epoch, 0u, 0u, 0u));
   }
 }
 `,
@@ -573,6 +587,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
       !this.device ||
       !this.bindGroupLayout ||
       !this.uniformBuffer ||
+      !this.defenseParamsBuffer ||
       !this.stateTexture ||
       !this.defendedTex ||
       !this.paletteTexture ||
@@ -584,10 +599,11 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
       layout: this.bindGroupLayout,
       entries: [
         { binding: 0, resource: { buffer: this.uniformBuffer } },
-        { binding: 1, resource: this.stateTexture.createView() },
-        { binding: 2, resource: this.defendedTex.createView() },
-        { binding: 3, resource: this.paletteTexture.createView() },
-        { binding: 4, resource: this.terrainTexture.createView() },
+        { binding: 1, resource: { buffer: this.defenseParamsBuffer } },
+        { binding: 2, resource: this.stateTexture.createView() },
+        { binding: 3, resource: this.defendedTex.createView() },
+        { binding: 4, resource: this.paletteTexture.createView() },
+        { binding: 5, resource: this.terrainTexture.createView() },
       ],
     });
   }
@@ -630,7 +646,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
     if (
       !this.device ||
       !this.updateDefendedBindGroupLayout ||
-      !this.computeUniformBuffer ||
+      !this.defenseParamsBuffer ||
       !this.defensePostsBuffer ||
       !this.stateTexture ||
       !this.defendedTex ||
@@ -643,7 +659,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
     this.updateDefendedBindGroup = this.device.createBindGroup({
       layout: this.updateDefendedBindGroupLayout,
       entries: [
-        { binding: 0, resource: { buffer: this.computeUniformBuffer } },
+        { binding: 0, resource: { buffer: this.defenseParamsBuffer } },
         { binding: 1, resource: { buffer: this.defensePostsBuffer } },
         { binding: 2, resource: this.stateTexture.createView() },
         { binding: 3, resource: this.defendedTex.createView() },
@@ -653,7 +669,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
 
   public markDefensePostsDirty() {
     this.needsDefensePostsUpload = true;
-    this.needsFullRebuild = true;
+    this.needsDefendedRebuild = true;
   }
 
   setAlternativeView(enabled: boolean) {
@@ -686,21 +702,22 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
   markTile(tile: TileRef) {
     // Always add the tile to the set of pending updates. Even if a full
     // rebuild is pending we still need to update the GPU state texture for
-    // this tile so any derived textures (e.g. defended tiles) use the correct state.
+    // this tile so that the rebuild pass uses the correct state value.
     this.pendingTiles.add(tile);
     // No need to mark stateTexture for upload; the GPU owns the state
     // texture. Updates will be scattered via compute in tick().
   }
 
   markAllDirty() {
-    this.needsFullRebuild = true;
+    this.needsDefendedRebuild = true;
     // Do not clear pending updates. A full rebuild will still require any
-    // outstanding state updates to be applied first so that any derived
-    // textures (e.g. defended tiles) are computed from the latest state.
+    // outstanding state updates to be applied first so that derived GPU
+    // passes (defended, future shaders) see the latest state.
   }
 
   refreshPalette() {
     this.needsPaletteUpload = true;
+    // Palette changes are consumed directly by the fragment shader.
   }
 
   private ensureUpdatesBuffer(capacity: number) {
@@ -959,117 +976,87 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
     }
   }
 
-  /**
-   * Write compute uniform buffer. Only contains defenseParams which is
-   * the only uniform data the compute shader needs.
-   */
-  private writeComputeUniformBuffer() {
-    if (!this.computeUniformBuffer || !this.device) {
+  private writeUniformBuffer(timeSec: number) {
+    if (!this.uniformBuffer || !this.device) {
       return;
     }
 
-    const range = this.game.config().defensePostRange();
-    this.computeUniformData[0] = range;
-    this.computeUniformData[1] = this.defensePostsCount;
-    this.computeUniformData[2] = 0;
-    this.computeUniformData[3] = 0;
-
-    this.device.queue.writeBuffer(
-      this.computeUniformBuffer,
-      0,
-      this.computeUniformData,
-    );
-  }
-
-  /**
-   * Update the common uniform fields for render (map dimensions and defense params).
-   */
-  private updateRenderUniformFields() {
-    const range = this.game.config().defensePostRange();
     this.uniformData[0] = this.mapWidth;
     this.uniformData[1] = this.mapHeight;
-    this.uniformData[8] = range;
-    this.uniformData[9] = this.defensePostsCount;
-    this.uniformData[10] = 0;
-    this.uniformData[11] = 0;
-  }
-
-  /**
-   * Update the view transform fields used only by rendering.
-   */
-  private updateViewTransformFields(timeSec: number) {
     this.uniformData[2] = this.viewScale;
     this.uniformData[3] = timeSec;
     this.uniformData[4] = this.viewOffsetX;
     this.uniformData[5] = this.viewOffsetY;
     this.uniformData[6] = this.alternativeView ? 1 : 0;
     this.uniformData[7] = this.highlightedOwnerId;
-  }
+    this.uniformData[8] = this.viewWidth;
+    this.uniformData[9] = this.viewHeight;
+    this.uniformData[10] = 0;
+    this.uniformData[11] = 0;
 
-  /**
-   * Write uniform buffer for rendering. Updates all values including
-   * view transform which is used by the fragment shader.
-   */
-  private writeUniformBuffer(timeSec: number) {
-    if (!this.uniformBuffer || !this.device) {
-      return;
-    }
-
-    this.updateRenderUniformFields();
-    this.updateViewTransformFields(timeSec);
     this.device.queue.writeBuffer(this.uniformBuffer, 0, this.uniformData);
   }
 
+  private writeDefenseParamsBuffer() {
+    if (!this.device || !this.defenseParamsBuffer) {
+      return;
+    }
+    const range = this.game.config().defensePostRange() >>> 0;
+    this.defenseParamsData[0] = range;
+    this.defenseParamsData[1] = this.defensePostsCount >>> 0;
+    this.defenseParamsData[2] = this.defendedEpoch >>> 0;
+    this.defenseParamsData[3] = 0;
+    this.device.queue.writeBuffer(
+      this.defenseParamsBuffer,
+      0,
+      this.defenseParamsData,
+    );
+  }
+
   /**
-   * Perform one simulation tick. This uploads any staged palette changes, any
-   * pending tile updates, and dispatches compute passes to update the state
-   * texture and defended texture. Compute work
-   * only runs when necessary.
+   * Perform one simulation tick. This uploads any staged palette changes and
+   * any pending tile updates, and dispatches compute passes to update the
+   * GPU-authoritative state texture and defended stamp texture.
    */
   public tick() {
     if (!this.ready || !this.device) {
       return;
     }
 
-    // Upload palette if needed. Rendering uses the palette texture directly.
+    // Palette changes are consumed directly by the fragment shader.
     this.uploadPaletteIfNeeded();
 
-    // Upload defense posts buffer if needed.
+    const postsDirty = this.needsDefensePostsUpload;
     this.uploadDefensePostsIfNeeded();
 
-    // If the state texture has not yet been uploaded (initial upload), do so now.
-    // This will convert the CPU's 16-bit state array into a 32-bit texture.
+    // Initial upload of the state texture (CPU -> GPU), after which scatter updates keep it current.
     this.uploadStateTextureIfNeeded();
 
-    // Determine how many updates need to be processed
     const numUpdates = this.pendingTiles.size;
+    const range = this.game.config().defensePostRange();
+    const rangeChanged = range !== this.lastDefenseRange;
+    const countChanged = this.defensePostsCount !== this.lastDefensePostsCount;
+    const hasPosts = this.defensePostsCount > 0;
 
-    // Early-out if no compute work is needed
-    if (numUpdates === 0 && !this.needsFullRebuild) {
+    const shouldRebuildDefended =
+      this.needsDefendedRebuild ||
+      postsDirty ||
+      rangeChanged ||
+      countChanged ||
+      (hasPosts && numUpdates > 0);
+
+    const needsCompute =
+      numUpdates > 0 || shouldRebuildDefended || this.needsDefendedHardClear;
+
+    // Keep the defense params buffer up to date even if we early-out.
+    if (!needsCompute) {
+      this.writeDefenseParamsBuffer();
       return;
     }
 
-    // Update compute uniform buffer (only defense params needed).
-    this.writeComputeUniformBuffer();
-
     const encoder = this.device.createCommandEncoder();
 
-    // 1) Clear defended texture
-    if (
-      this.computePipelineClearDefended &&
-      this.clearDefendedBindGroup &&
-      this.defendedTex
-    ) {
-      const clearPass = encoder.beginComputePass();
-      clearPass.setPipeline(this.computePipelineClearDefended);
-      clearPass.setBindGroup(0, this.clearDefendedBindGroup);
-      const workgroupCountX = Math.ceil(this.mapWidth / 8);
-      const workgroupCountY = Math.ceil(this.mapHeight / 8);
-      clearPass.dispatchWorkgroups(workgroupCountX, workgroupCountY);
-      clearPass.end();
-    }
-
-    // 2) Scatter state updates
+    // 1) Scatter state updates (authoritative map state)
     if (numUpdates > 0) {
       this.ensureUpdatesBuffer(numUpdates);
       if (this.updatesStaging && this.updatesBuffer) {
@@ -1085,7 +1072,6 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
           0,
           this.updatesStaging.subarray(0, numUpdates * 2),
         );
-        // Rebuild scatter bind group in case the buffer changed
         this.rebuildScatterBindGroup();
         if (this.scatterBindGroup && this.computePipelineScatterState) {
           const scatterPass = encoder.beginComputePass();
@@ -1094,34 +1080,75 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
           scatterPass.dispatchWorkgroups(numUpdates);
           scatterPass.end();
         }
-        // Clear pending tiles on CPU side
         this.pendingTiles.clear();
       }
     }
 
-    // 3) Update defended texture
-    if (
-      this.defensePostsCount > 0 &&
-      this.computePipelineUpdateDefended &&
-      this.updateDefendedBindGroup
-    ) {
-      const range = this.game.config().defensePostRange();
-      const gridSize = 2 * range + 1;
-      const workgroupCount = Math.ceil(gridSize / 8);
-
-      const defendedPass = encoder.beginComputePass();
-      defendedPass.setPipeline(this.computePipelineUpdateDefended);
-      defendedPass.setBindGroup(0, this.updateDefendedBindGroup);
-      defendedPass.dispatchWorkgroups(
-        workgroupCount,
-        workgroupCount,
-        this.defensePostsCount,
-      );
-      defendedPass.end();
+    // 2) Hard clear defended texture (rare): initial init / epoch wrap.
+    if (this.needsDefendedHardClear) {
+      if (this.computePipelineClearDefended && this.clearDefendedBindGroup) {
+        const clearPass = encoder.beginComputePass();
+        clearPass.setPipeline(this.computePipelineClearDefended);
+        clearPass.setBindGroup(0, this.clearDefendedBindGroup);
+        const workgroupCountX = Math.ceil(this.mapWidth / 8);
+        const workgroupCountY = Math.ceil(this.mapHeight / 8);
+        clearPass.dispatchWorkgroups(workgroupCountX, workgroupCountY);
+        clearPass.end();
+      }
+      this.needsDefendedHardClear = false;
     }
-    // No full-map colour rebuild here: rendering composes colours at view resolution.
 
-    this.needsFullRebuild = false;
+    // 3) Rebuild defended stamps by bumping epoch (eliminates full clears on rebuild)
+    if (shouldRebuildDefended) {
+      this.defendedEpoch = (this.defendedEpoch + 1) >>> 0;
+      // Extremely unlikely to wrap in practice, but keep it correct.
+      if (this.defendedEpoch === 0) {
+        this.needsDefendedHardClear = true;
+        this.defendedEpoch = 1;
+      }
+
+      // If we wrapped and need a hard clear, do it before stamping.
+      if (this.needsDefendedHardClear) {
+        if (this.computePipelineClearDefended && this.clearDefendedBindGroup) {
+          const clearPass = encoder.beginComputePass();
+          clearPass.setPipeline(this.computePipelineClearDefended);
+          clearPass.setBindGroup(0, this.clearDefendedBindGroup);
+          const workgroupCountX = Math.ceil(this.mapWidth / 8);
+          const workgroupCountY = Math.ceil(this.mapHeight / 8);
+          clearPass.dispatchWorkgroups(workgroupCountX, workgroupCountY);
+          clearPass.end();
+        }
+        this.needsDefendedHardClear = false;
+      }
+
+      this.writeDefenseParamsBuffer();
+
+      if (
+        hasPosts &&
+        this.computePipelineUpdateDefended &&
+        this.updateDefendedBindGroup
+      ) {
+        const gridSize = 2 * range + 1;
+        const workgroupCount = Math.ceil(gridSize / 8);
+        const defendedPass = encoder.beginComputePass();
+        defendedPass.setPipeline(this.computePipelineUpdateDefended);
+        defendedPass.setBindGroup(0, this.updateDefendedBindGroup);
+        defendedPass.dispatchWorkgroups(
+          workgroupCount,
+          workgroupCount,
+          this.defensePostsCount,
+        );
+        defendedPass.end();
+      }
+
+      this.needsDefendedRebuild = false;
+    } else {
+      // No defended rebuild this tick, but keep params synced for render.
+      this.writeDefenseParamsBuffer();
+    }
+
+    this.lastDefenseRange = range;
+    this.lastDefensePostsCount = this.defensePostsCount;
 
     this.device.queue.submit([encoder.finish()]);
   }
@@ -1139,6 +1166,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3<u32>) {
 
     // Update uniforms
     this.writeUniformBuffer(performance.now() / 1000);
+    this.writeDefenseParamsBuffer();
 
     // Encode render pass. No compute work is scheduled here; all compute happens in tick().
     const encoder = this.device.createCommandEncoder();

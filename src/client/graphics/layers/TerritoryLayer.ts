@@ -17,6 +17,9 @@ export class TerritoryLayer implements Layer {
 
   private attachedTerritoryCanvas: HTMLCanvasElement | null = null;
 
+  private overlayWrapper: HTMLElement | null = null;
+  private overlayResizeObserver: ResizeObserver | null = null;
+
   private theme: Theme;
 
   private territoryRenderer: TerritoryWebGLRenderer | null = null;
@@ -138,32 +141,80 @@ export class TerritoryLayer implements Layer {
 
     const canvas = this.territoryRenderer.canvas;
 
+    // If the renderer recreated its canvas, detach the old one.
     if (this.attachedTerritoryCanvas !== canvas) {
       this.attachedTerritoryCanvas?.remove();
       this.attachedTerritoryCanvas = canvas;
+
+      // Configure overlay canvas styles once. Avoid per-frame style reads/writes.
+      canvas.style.pointerEvents = "none";
+      canvas.style.position = "absolute";
+      canvas.style.inset = "0";
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
+      canvas.style.display = "block";
+      canvas.style.zIndex = "9999";
     }
 
-    const parent = mainCanvas.parentNode;
+    const parent = mainCanvas.parentElement;
     if (!parent) {
+      // Fallback: if the canvas isn't in the DOM yet, append to body.
       if (!canvas.isConnected) {
         document.body.appendChild(canvas);
       }
       return;
     }
 
-    if (!canvas.isConnected) {
-      parent.insertBefore(canvas, mainCanvas);
-      return;
+    // Ensure the main canvas is wrapped in a positioned container so the
+    // territory canvas can overlay it without mirroring computed styles.
+    let wrapper: HTMLElement;
+    const currentParent = mainCanvas.parentElement;
+    if (currentParent && currentParent.dataset.territoryOverlay === "1") {
+      wrapper = currentParent;
+    } else {
+      wrapper = document.createElement("div");
+      wrapper.dataset.territoryOverlay = "1";
+      wrapper.style.position = "relative";
+      wrapper.style.display = "inline-block";
+      wrapper.style.lineHeight = "0";
+
+      // Replace mainCanvas with wrapper, then re-insert mainCanvas inside wrapper.
+      parent.replaceChild(wrapper, mainCanvas);
+      wrapper.appendChild(mainCanvas);
     }
 
-    if (canvas.parentNode !== parent) {
-      parent.insertBefore(canvas, mainCanvas);
-      return;
+    if (this.overlayWrapper !== wrapper) {
+      this.overlayWrapper = wrapper;
+      this.overlayResizeObserver?.disconnect();
+      this.overlayResizeObserver = new ResizeObserver(() => {
+        this.syncOverlayWrapperSize(mainCanvas, wrapper);
+      });
+      this.overlayResizeObserver.observe(mainCanvas);
+      // Kick an initial size update; further updates are handled by ResizeObserver.
+      this.syncOverlayWrapperSize(mainCanvas, wrapper);
     }
 
-    if (canvas.nextSibling !== mainCanvas) {
-      parent.insertBefore(canvas, mainCanvas);
+    // Ensure overlay canvas is the last child so it paints on top.
+    if (canvas.parentElement !== wrapper) {
+      canvas.remove();
+      wrapper.appendChild(canvas);
+    } else if (canvas !== wrapper.lastElementChild) {
+      wrapper.appendChild(canvas);
     }
+  }
+
+  private syncOverlayWrapperSize(
+    mainCanvas: HTMLCanvasElement,
+    wrapper: HTMLElement,
+  ) {
+    // Ensure the wrapper has real layout size so the absolutely-positioned
+    // territory canvas (100% width/height) is non-zero even if the main canvas
+    // is positioned absolutely.
+    const rect = mainCanvas.getBoundingClientRect();
+    const w = rect.width > 0 ? rect.width : mainCanvas.clientWidth;
+    const h = rect.height > 0 ? rect.height : mainCanvas.clientHeight;
+    if (w > 0) wrapper.style.width = `${w}px`;
+    if (h > 0) wrapper.style.height = `${h}px`;
   }
 
   private markTile(tile: TileRef) {
