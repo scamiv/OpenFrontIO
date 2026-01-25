@@ -30,6 +30,7 @@ export class LocalServer {
 
   private intents: Intent[] = [];
   private startedAt: number;
+  private nextTurnAtMs: number = 0;
 
   private paused = false;
   private replaySpeedMultiplier = defaultReplaySpeedMultiplier;
@@ -38,7 +39,6 @@ export class LocalServer {
   private allPlayersStats: AllPlayersStats = {};
 
   private turnsExecuted = 0;
-  private turnStartTime = 0;
 
   private turnCheckInterval: NodeJS.Timeout;
   private clientConnect: () => void;
@@ -60,23 +60,54 @@ export class LocalServer {
 
   start() {
     console.log("local server starting");
+    this.nextTurnAtMs = Date.now();
     this.turnCheckInterval = setInterval(() => {
-      const turnIntervalMs =
-        this.lobbyConfig.serverConfig.turnIntervalMs() *
-        this.replaySpeedMultiplier;
+      if (this.paused) {
+        return;
+      }
 
-      if (
-        this.turnsExecuted === this.turns.length &&
-        Date.now() > this.turnStartTime + turnIntervalMs
+      const baseTurnIntervalMs = this.lobbyConfig.serverConfig.turnIntervalMs();
+      const turnIntervalMs = baseTurnIntervalMs * this.replaySpeedMultiplier;
+
+      // Outstanding work is the number of turns we've emitted that the client hasn't applied yet.
+      const outstandingTurns = this.turns.length - this.turnsExecuted;
+
+      // For ×0.5/×1/×2 we aim to stay close to real time.
+      // For "fastest" (interval 0), allow a larger but bounded backlog so the sim can sprint
+      // while the main thread drains updates opportunistically.
+      const maxOutstandingTurns = turnIntervalMs === 0 ? 200 : 5;
+      const maxTurnsToEmitPerCheck = turnIntervalMs === 0 ? 200 : 5;
+
+      if (outstandingTurns >= maxOutstandingTurns) {
+        return;
+      }
+
+      const now = Date.now();
+      let emitted = 0;
+      while (
+        emitted < maxTurnsToEmitPerCheck &&
+        this.turns.length - this.turnsExecuted < maxOutstandingTurns &&
+        (turnIntervalMs === 0 || now >= this.nextTurnAtMs)
       ) {
-        this.turnStartTime = Date.now();
         // End turn on the server means the client will start processing the turn.
         this.endTurn();
+        emitted++;
+
+        if (turnIntervalMs === 0) {
+          // "Fastest": no wall-clock pacing; rely on backlog caps above.
+          this.nextTurnAtMs = now;
+        } else {
+          // Fixed-rate pacing: do not try to "catch up" after stalls; resume from now.
+          this.nextTurnAtMs = now + turnIntervalMs;
+        }
       }
     }, 5);
 
     this.eventBus.on(ReplaySpeedChangeEvent, (event) => {
       this.replaySpeedMultiplier = event.replaySpeedMultiplier;
+      // Apply speed changes immediately; the next scheduled turn time will be
+      // recalculated by the interval loop.
+      this.nextTurnAtMs = Date.now();
     });
 
     this.startedAt = Date.now();
@@ -113,11 +144,13 @@ export class LocalServer {
           this.intents.push(clientMsg.intent);
           this.endTurn();
           this.paused = true;
+          this.nextTurnAtMs = Date.now();
         } else {
           // Unpausing: clear pause flag before adding intent so next turn can execute
           this.paused = false;
           this.intents.push(clientMsg.intent);
           this.endTurn();
+          this.nextTurnAtMs = Date.now();
         }
         return;
       }
@@ -172,8 +205,11 @@ export class LocalServer {
   }
 
   // This is so the client can tell us when it finished processing the turn.
-  public turnComplete() {
-    this.turnsExecuted++;
+  public turnComplete(count: number = 1) {
+    this.turnsExecuted = Math.min(
+      this.turnsExecuted + count,
+      this.turns.length,
+    );
   }
 
   // endTurn in this context means the server has collected all the intents
