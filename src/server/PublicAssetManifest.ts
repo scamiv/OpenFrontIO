@@ -4,7 +4,6 @@ import { globSync } from "glob";
 import path from "path";
 import {
   type AssetManifest,
-  buildAssetUrl,
   encodeAssetPath,
   normalizeAssetPath,
 } from "../core/AssetUrls";
@@ -97,6 +96,12 @@ function getEmittedAssetRelativePath(
   return path.posix.relative(emittedFromDir, emittedTargetPath);
 }
 
+function isExternalAssetReference(referencePath: string): boolean {
+  return (
+    /^[a-z][a-z0-9+.-]*:/i.test(referencePath) || referencePath.startsWith("//")
+  );
+}
+
 function renderWebManifestAsset({
   resourcesDir,
   assetManifest,
@@ -105,10 +110,38 @@ function renderWebManifestAsset({
   const manifest = JSON.parse(fs.readFileSync(sourcePath, "utf8")) as {
     icons?: Array<{ src?: string }>;
   };
-  manifest.icons = manifest.icons?.map((icon) => ({
-    ...icon,
-    src: buildAssetUrl(icon.src ?? "", assetManifest),
-  }));
+  manifest.icons = manifest.icons?.map((icon) => {
+    const src = icon.src;
+    if (src === undefined) {
+      return icon;
+    }
+
+    if (src.trim().length === 0) {
+      throw new Error(
+        "Derived asset manifest.json contains an icon with a blank src",
+      );
+    }
+
+    if (isExternalAssetReference(src)) {
+      return icon;
+    }
+
+    const referencedAssetPath = resolveDerivedAssetReference(
+      "manifest.json",
+      src,
+    );
+    const referencedHashedUrl = assetManifest[referencedAssetPath];
+    if (!referencedHashedUrl) {
+      throw new Error(
+        `Derived asset manifest.json references ${referencedAssetPath}, but it is missing from the asset manifest`,
+      );
+    }
+
+    return {
+      ...icon,
+      src: referencedHashedUrl,
+    };
+  });
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 

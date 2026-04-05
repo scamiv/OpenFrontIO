@@ -69,6 +69,23 @@ describe("PublicAssetManifest", () => {
     );
   }
 
+  async function writeWebManifestFixture(
+    resourcesDir: string,
+    icons: Array<{ src?: string }>,
+  ): Promise<void> {
+    await fs.writeFile(
+      path.join(resourcesDir, "manifest.json"),
+      JSON.stringify(
+        {
+          name: "OpenFront",
+          icons,
+        },
+        null,
+        2,
+      ),
+    );
+  }
+
   afterEach(async () => {
     clearPublicAssetManifestCache();
     if (tempDir) {
@@ -81,17 +98,9 @@ describe("PublicAssetManifest", () => {
     const { resourcesDir, outDir } = await createTempResources();
 
     await fs.mkdir(path.join(resourcesDir, "icons"), { recursive: true });
-    await fs.writeFile(
-      path.join(resourcesDir, "manifest.json"),
-      JSON.stringify(
-        {
-          name: "OpenFront",
-          icons: [{ src: "icons/app-icon.png" }],
-        },
-        null,
-        2,
-      ),
-    );
+    await writeWebManifestFixture(resourcesDir, [
+      { src: "icons/app-icon.png" },
+    ]);
     await fs.writeFile(
       path.join(resourcesDir, "icons", "app-icon.png"),
       "icon-v1",
@@ -123,6 +132,61 @@ describe("PublicAssetManifest", () => {
     expect(firstManifestHref).not.toBe(secondManifestHref);
     expect(firstOutput).toContain(firstIconHref);
     expect(firstOutput).not.toContain(secondIconHref);
+  });
+
+  test("rewrites root-relative web manifest icon paths to hashed URLs", async () => {
+    const { resourcesDir, outDir } = await createTempResources();
+
+    await fs.mkdir(path.join(resourcesDir, "icons"), { recursive: true });
+    await writeWebManifestFixture(resourcesDir, [
+      { src: "/icons/app-icon.png" },
+    ]);
+    await fs.writeFile(
+      path.join(resourcesDir, "icons", "app-icon.png"),
+      "icon-v1",
+      "utf8",
+    );
+
+    const assetManifest = buildPublicAssetManifest(resourcesDir);
+    createHashedPublicAssetFiles(resourcesDir, outDir, assetManifest);
+
+    const emittedManifest = await emitHashedAsset(
+      outDir,
+      assetManifest["manifest.json"],
+    );
+
+    expect(emittedManifest).toContain(assetManifest["icons/app-icon.png"]);
+    expect(emittedManifest).not.toContain('"/icons/app-icon.png"');
+  });
+
+  test("fails when web manifest references a missing local icon", async () => {
+    const { resourcesDir } = await createTempResources();
+
+    await writeWebManifestFixture(resourcesDir, [{ src: "icons/missing.png" }]);
+
+    expect(() => buildPublicAssetManifest(resourcesDir)).toThrow(
+      /manifest\.json references icons\/missing\.png/i,
+    );
+  });
+
+  test("leaves external and data web manifest icon refs unchanged", async () => {
+    const { resourcesDir, outDir } = await createTempResources();
+
+    await writeWebManifestFixture(resourcesDir, [
+      { src: "https://cdn.example.com/app-icon.png" },
+      { src: "data:image/png;base64,AAA" },
+    ]);
+
+    const assetManifest = buildPublicAssetManifest(resourcesDir);
+    createHashedPublicAssetFiles(resourcesDir, outDir, assetManifest);
+
+    const emittedManifest = await emitHashedAsset(
+      outDir,
+      assetManifest["manifest.json"],
+    );
+
+    expect(emittedManifest).toContain("https://cdn.example.com/app-icon.png");
+    expect(emittedManifest).toContain("data:image/png;base64,AAA");
   });
 
   test("rewrites BMFont XML page filenames to hashed relative paths", async () => {
