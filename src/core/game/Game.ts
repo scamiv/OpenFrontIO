@@ -913,6 +913,12 @@ export interface Game extends GameMap {
   miniWaterGraph(): AbstractGraph | null;
   getWaterComponent(tile: TileRef): number | null;
   hasWaterComponent(tile: TileRef, component: number): boolean;
+  blockTradeRouteUntil(srcPortId: number, dstPortId: number, tick: Tick): void;
+  isTradeRouteBlocked(
+    srcPortId: number,
+    dstPortId: number,
+    nowTick: Tick,
+  ): boolean;
 }
 
 export interface PlayerActions {

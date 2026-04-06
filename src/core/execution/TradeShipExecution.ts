@@ -7,6 +7,7 @@ import {
   Unit,
   UnitType,
 } from "../game/Game";
+import { TRADE_ROUTE_BLOCK_DURATION_TICKS } from "../game/GameImpl";
 import { TileRef } from "../game/GameMap";
 import { PathFinding } from "../pathfinding/PathFinder";
 import { PathStatus, SteppingPathFinder } from "../pathfinding/types";
@@ -21,12 +22,17 @@ export class TradeShipExecution implements Execution {
   private tilesTraveled = 0;
   private motionPlanId = 1;
   private motionPlanDst: TileRef | null = null;
+  private readonly srcPortId: number;
+  private readonly dstPortId: number;
 
   constructor(
     private origOwner: Player,
     private srcPort: Unit,
     private _dstPort: Unit,
-  ) {}
+  ) {
+    this.srcPortId = srcPort.id();
+    this.dstPortId = _dstPort.id();
+  }
 
   init(mg: Game, ticks: number): void {
     this.mg = mg;
@@ -61,6 +67,11 @@ export class TradeShipExecution implements Execution {
     if (this.wasCaptured !== true && this.origOwner !== tradeShipOwner) {
       // Store as variable in case ship is recaptured by previous owner
       this.wasCaptured = true;
+      this.mg.blockTradeRouteUntil(
+        this.srcPortId,
+        this.dstPortId,
+        this.mg.ticks() + TRADE_ROUTE_BLOCK_DURATION_TICKS,
+      );
     }
 
     // If a player captures another player's port while trading we should delete
