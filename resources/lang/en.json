@@ -106,6 +106,9 @@
     "action_ratio_change": "Decrease/Increase attack ratio",
     "action_reset_gfx": "Reset graphics",
     "action_auto_upgrade": "Auto-upgrade nearest building",
+    "action_warship_multiselect": "Select multiple warships (drag to draw selection box)",
+    "action_warship_selectall": "Select all your warships",
+    "drag": "drag",
     "ui_section": "Game UI",
     "ui_leaderboard": "Leaderboard",
     "ui_your_team": "Your team:",
@@ -185,7 +188,8 @@
     "exit_confirmation": "Are you sure you want to exit the game?",
     "bomb_direction": "Atom / Hydrogen bomb arc direction",
     "icon_alt_player_leaderboard": "Player Leaderboard Icon",
-    "icon_alt_team_leaderboard": "Team Leaderboard Icon"
+    "icon_alt_team_leaderboard": "Team Leaderboard Icon",
+    "game_id_tooltip": "Game ID"
   },
   "single_modal": {
     "random_spawn": "Random spawn",
@@ -360,7 +364,8 @@
     "straitofmalacca": "Strait Of Malacca",
     "luna": "Luna",
     "conakry": "Conakry",
-    "caucasus": "Caucasus"
+    "caucasus": "Caucasus",
+    "beringsea": "Bering Sea"
   },
   "map_categories": {
     "featured": "Featured",
@@ -545,6 +550,7 @@
     "title": "Settings",
     "tab_basic": "Basic Settings",
     "tab_keybinds": "Keybinds",
+    "keybinds_hint": "Click a key to rebind it. You can assign a single key or Shift + key combination.",
     "dark_mode_label": "Dark Mode",
     "dark_mode_desc": "Toggle the site’s appearance between light and dark themes",
     "emojis_label": "Emojis",
@@ -627,6 +633,11 @@
     "boat_attack_desc": "Send a boat attack to the tile under your cursor.",
     "ground_attack": "Ground Attack",
     "ground_attack_desc": "Send a ground attack to the tile under your cursor.",
+    "ally_keybinds": "Ally Keybinds",
+    "request_alliance": "Request Alliance",
+    "request_alliance_desc": "Send an alliance request to the player whose tile is under your cursor.",
+    "break_alliance": "Break Alliance (Betray)",
+    "break_alliance_desc": "Break alliance with the player whose tile is under your cursor.",
     "swap_direction": "Swap Rocket Direction",
     "swap_direction_desc": "Toggle rocket launch direction (up/down).",
     "zoom_controls": "Zoom Controls",
@@ -758,6 +769,7 @@
       "city": "Increases max population",
       "factory": "Creates railroads and spawns trains"
     },
+    "warship_shift_hint": "Hold Shift and drag to select multiple warships at once",
     "not_enough_money": "Not enough money"
   },
   "win_modal": {
@@ -811,6 +823,7 @@
     "sent_emoji": "Sent {name}: {emoji}",
     "renew_alliance": "Request to renew",
     "request_alliance": "{name} requests an alliance!",
+    "alliance_request_sent": "Alliance request sent to {name}.",
     "focus": "Focus",
     "accept_alliance": "Accept",
     "reject_alliance": "Reject",
@@ -879,6 +892,7 @@
   "kick_reason": {
     "duplicate_session": "Kicked from game (you may have been playing on another tab)",
     "lobby_creator": "Kicked by lobby creator",
+    "admin": "Kicked by an admin",
     "host_left": "The host has left the lobby."
   },
   "send_troops_modal": {
@@ -1068,7 +1082,9 @@
     "tournament": "TOURNAMENT",
     "tutorial": "TUTORIAL",
     "news": "NEWS",
+    "warning": "WARNING",
     "dismiss": "Dismiss",
-    "go_to_item": "Go to item {num}"
+    "go_to_item": "Go to item {num}",
+    "firefox_warning": "OpenFront.io doesn't perform well with [Firefox-based browsers](https://simple.wikipedia.org/wiki/Web_browsers_based_on_Firefox). We recommend you to use a [Chromium-based browser](https://en.wikipedia.org/wiki/Chromium_(web_browser)#Browsers_based_on_Chromium) for best performance."
   }
 }
